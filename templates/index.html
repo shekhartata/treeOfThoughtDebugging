@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MongoDB Tree-of-Thought Debugging Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .section h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+        }
+        
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .hypotheses {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .hypothesis-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border: 2px solid #e0e0e0;
+            transition: all 0.3s;
+        }
+        
+        .hypothesis-card.active {
+            border-color: #4caf50;
+        }
+        
+        .hypothesis-card.pruned {
+            border-color: #f44336;
+            opacity: 0.6;
+        }
+        
+        .hypothesis-card.accepted {
+            border-color: #2196f3;
+            border-width: 3px;
+        }
+        
+        .hypothesis-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .hypothesis-title {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .confidence-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .confidence-high {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .confidence-medium {
+            background: #ff9800;
+            color: white;
+        }
+        
+        .confidence-low {
+            background: #f44336;
+            color: white;
+        }
+        
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .evidence-list {
+            margin-top: 10px;
+            padding-left: 20px;
+        }
+        
+        .evidence-list li {
+            margin: 5px 0;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .next-requests {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+        
+        .next-requests ul {
+            margin-top: 10px;
+            padding-left: 20px;
+        }
+        
+        .next-requests li {
+            margin: 8px 0;
+            color: #1976d2;
+        }
+        
+        .artifact-upload {
+            background: #fff3e0;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+        
+        .tree-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .summary-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .summary-value {
+            font-size: 2em;
+            font-weight: 700;
+            color: #667eea;
+        }
+        
+        .summary-label {
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+        
+        .final-analysis {
+            background: #e8f5e9;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        
+        .final-analysis h3 {
+            color: #2e7d32;
+            margin-bottom: 15px;
+        }
+        
+        .mitigation {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #c62828;
+        }
+        
+        .success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #2e7d32;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌳 MongoDB Tree-of-Thought Debugging Tool</h1>
+            <p>Interactive debugging assistant for Consulting Engineers</p>
+        </div>
+        
+        <div class="content">
+            <!-- Initialization Section -->
+            <div class="section" id="init-section">
+                <h2>1. Problem Summary</h2>
+                <div class="form-group">
+                    <label for="problem-summary">Describe the MongoDB issue:</label>
+                    <textarea id="problem-summary" placeholder="e.g., Writes slow on primary after deploy. Users reporting timeouts."></textarea>
+                </div>
+                <button id="init-btn" onclick="initialize()">Initialize Debugging Session</button>
+            </div>
+            
+            <!-- Current State Section -->
+            <div class="section" id="current-section" style="display: none;">
+                <h2>Current Reasoning Step: <span id="step-number">-</span></h2>
+                
+                <div class="tree-summary" id="tree-summary">
+                    <!-- Tree summary cards will be inserted here -->
+                </div>
+                
+                <h3 style="margin-top: 20px;">Active Hypotheses</h3>
+                <div class="hypotheses" id="hypotheses">
+                    <!-- Hypothesis cards will be inserted here -->
+                </div>
+                
+                <div class="next-requests" id="next-requests">
+                    <strong>📋 Next Data Requests:</strong>
+                    <ul id="requests-list"></ul>
+                </div>
+                
+                <div class="artifact-upload" id="artifact-section">
+                    <h3>📎 Upload Artifact</h3>
+                    <div class="form-group">
+                        <label for="artifact-name">Artifact Name:</label>
+                        <input type="text" id="artifact-name" placeholder="e.g., db.currentOp() output">
+                    </div>
+                    <div class="form-group">
+                        <label for="artifact-content">Artifact Content:</label>
+                        <textarea id="artifact-content" placeholder="Paste MongoDB command output, logs, or metrics here..."></textarea>
+                    </div>
+                    <button id="upload-btn" onclick="uploadArtifact()">Upload & Analyze</button>
+                </div>
+                
+                <div style="margin-top: 20px;">
+                    <button onclick="getFinalAnalysis()" style="background: #4caf50;">Get Final Analysis</button>
+                    <button onclick="resetSession()" style="background: #f44336; margin-left: 10px;">Reset Session</button>
+                </div>
+            </div>
+            
+            <!-- Final Analysis Section -->
+            <div class="section" id="final-section" style="display: none;">
+                <h2>🔍 Root Cause Analysis</h2>
+                <div class="final-analysis" id="final-analysis-content">
+                    <!-- Final analysis will be inserted here -->
+                </div>
+            </div>
+            
+            <!-- Messages -->
+            <div id="messages"></div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        
+        function showMessage(message, type = 'success') {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = type;
+            messageDiv.textContent = message;
+            messagesDiv.appendChild(messageDiv);
+            setTimeout(() => messageDiv.remove(), 5000);
+        }
+        
+        async function initialize() {
+            const problemSummary = document.getElementById('problem-summary').value.trim();
+            
+            if (!problemSummary) {
+                showMessage('Please enter a problem summary', 'error');
+                return;
+            }
+            
+            const btn = document.getElementById('init-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Initializing...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/initialize`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ problem_summary: problemSummary })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    document.getElementById('init-section').style.display = 'none';
+                    document.getElementById('current-section').style.display = 'block';
+                    updateCurrentState(data);
+                    showMessage('Session initialized successfully!');
+                } else {
+                    showMessage(data.error || 'Failed to initialize', 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Initialize Debugging Session';
+            }
+        }
+        
+        async function uploadArtifact() {
+            const artifactName = document.getElementById('artifact-name').value.trim();
+            const artifactContent = document.getElementById('artifact-content').value.trim();
+            
+            if (!artifactName || !artifactContent) {
+                showMessage('Please provide both artifact name and content', 'error');
+                return;
+            }
+            
+            const btn = document.getElementById('upload-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Processing...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/upload-artifact`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        artifact_name: artifactName,
+                        artifact_content: artifactContent
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    updateCurrentState(data);
+                    showMessage('Artifact processed successfully!');
+                    
+                    // Clear artifact inputs
+                    document.getElementById('artifact-name').value = '';
+                    document.getElementById('artifact-content').value = '';
+                    
+                    // Check if complete
+                    if (data.is_complete) {
+                        showMessage('Sufficient data gathered. You can get final analysis now.', 'success');
+                    }
+                } else {
+                    showMessage(data.error || 'Failed to process artifact', 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Upload & Analyze';
+            }
+        }
+        
+        function updateCurrentState(data) {
+            const node = data.node;
+            
+            // Update step number
+            document.getElementById('step-number').textContent = node.step_number;
+            
+            // Update tree summary
+            if (data.tree_summary) {
+                const summary = data.tree_summary;
+                const summaryDiv = document.getElementById('tree-summary');
+                summaryDiv.innerHTML = `
+                    <div class="summary-card">
+                        <div class="summary-value">${summary.total_nodes}</div>
+                        <div class="summary-label">Steps</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-value">${summary.active_hypotheses}</div>
+                        <div class="summary-label">Active</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-value">${summary.accepted_hypotheses}</div>
+                        <div class="summary-label">Accepted</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-value">${summary.pruned_hypotheses}</div>
+                        <div class="summary-label">Pruned</div>
+                    </div>
+                `;
+            }
+            
+            // Update hypotheses
+            const hypothesesDiv = document.getElementById('hypotheses');
+            hypothesesDiv.innerHTML = node.hypotheses.map(h => {
+                const confidenceClass = h.confidence >= 0.7 ? 'confidence-high' : 
+                                      h.confidence >= 0.4 ? 'confidence-medium' : 'confidence-low';
+                return `
+                    <div class="hypothesis-card ${h.status}">
+                        <div class="hypothesis-header">
+                            <div class="hypothesis-title">${h.description}</div>
+                            <div>
+                                <span class="confidence-badge ${confidenceClass}">${(h.confidence * 100).toFixed(0)}%</span>
+                                <span class="status-badge" style="background: ${h.status === 'active' ? '#4caf50' : h.status === 'accepted' ? '#2196f3' : '#f44336'}; color: white; margin-left: 5px;">${h.status}</span>
+                            </div>
+                        </div>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px;">Category: ${h.category}</div>
+                        ${h.evidence && h.evidence.length > 0 ? `
+                            <ul class="evidence-list">
+                                ${h.evidence.slice(0, 3).map(e => `<li>${e}</li>`).join('')}
+                            </ul>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            // Update next requests
+            const requests = data.next_requests || node.requested_data || [];
+            const requestsList = document.getElementById('requests-list');
+            requestsList.innerHTML = requests.map(r => `<li>${r}</li>`).join('');
+        }
+        
+        async function getFinalAnalysis() {
+            try {
+                const response = await fetch(`${API_BASE}/final-analysis`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const analysis = data.analysis;
+                    const finalDiv = document.getElementById('final-section');
+                    finalDiv.style.display = 'block';
+                    
+                    // Check if all hypotheses were pruned
+                    const allPruned = analysis.all_hypotheses_pruned || false;
+                    const warningMsg = allPruned ? 
+                        '<div style="background: #fff3cd; padding: 15px; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #ffc107;"><strong>⚠️ Note:</strong> All initial hypotheses were pruned based on available artifacts. Recommendations below are based on the problem description and collected artifacts.</div>' : '';
+                    
+                    document.getElementById('final-analysis-content').innerHTML = `
+                        ${warningMsg}
+                        <h3>Root Cause: ${analysis.root_cause}</h3>
+                        <div style="margin-top: 15px;">
+                            <strong>Confidence:</strong> ${(analysis.confidence * 100).toFixed(0)}%<br>
+                            <strong>Category:</strong> ${analysis.category || 'N/A'}
+                        </div>
+                        ${analysis.evidence && analysis.evidence.length > 0 ? `
+                            <div class="mitigation">
+                                <h4>Evidence:</h4>
+                                <ul>
+                                    ${analysis.evidence.map(e => `<li>${e}</li>`).join('')}
+                                </ul>
+                            </div>
+                        ` : ''}
+                        <div class="mitigation">
+                            <h4>Mitigation Steps:</h4>
+                            <p>${analysis.mitigation}</p>
+                        </div>
+                        <div class="mitigation">
+                            <h4>Next Steps:</h4>
+                            <ul>
+                                ${analysis.next_steps.map(s => `<li>${s}</li>`).join('')}
+                            </ul>
+                        </div>
+                        ${analysis.alternative_hypotheses && analysis.alternative_hypotheses.length > 0 ? `
+                            <div class="mitigation">
+                                <h4>Alternative Hypotheses:</h4>
+                                <ul>
+                                    ${analysis.alternative_hypotheses.map(h => `<li>${h.description} (${(h.confidence * 100).toFixed(0)}% confidence)</li>`).join('')}
+                                </ul>
+                            </div>
+                        ` : ''}
+                        ${analysis.raw_llm_analysis ? `
+                            <div class="mitigation" style="margin-top: 15px;">
+                                <h4>LLM Analysis:</h4>
+                                <p style="white-space: pre-wrap;">${analysis.raw_llm_analysis}</p>
+                            </div>
+                        ` : ''}
+                    `;
+                    
+                    // Scroll to final analysis
+                    finalDiv.scrollIntoView({ behavior: 'smooth' });
+                    showMessage('Final analysis generated!');
+                } else {
+                    showMessage(data.error || 'Failed to get final analysis', 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            }
+        }
+        
+        async function resetSession() {
+            if (confirm('Are you sure you want to reset the session? This will clear all tree content and start fresh.')) {
+                try {
+                    const response = await fetch(`${API_BASE}/reset`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        showMessage('Session reset successfully!', 'success');
+                        // Reload the page to start fresh
+                        setTimeout(() => {
+                            location.reload();
+                        }, 1000);
+                    } else {
+                        showMessage(data.error || 'Failed to reset session', 'error');
+                    }
+                } catch (error) {
+                    showMessage('Error resetting session: ' + error.message, 'error');
+                }
+            }
+        }
+        
+        // Load current state on page load
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`${API_BASE}/current-node`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('init-section').style.display = 'none';
+                    document.getElementById('current-section').style.display = 'block';
+                    updateCurrentState(data);
+                }
+            } catch (error) {
+                // Session not initialized, that's fine
+            }
+        });
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,55 @@
+LLM Analysis:
+1) ROOT_CAUSE (confidence: 0.65)
+Misuse of change stream resume semantics: streams are (re)started with startAtOperationTime (often “now”) instead of resuming from the last processed resume token (resumeAfter/startAfter), and/or sharing a single checkpoint across multiple independent streams. This creates event gaps during restarts or overlapping stream lifecycles. Because updates are far more frequent than inserts/deletes, the symptom presents as “updates not captured,” while the less frequent operations appear to be recorded.
+
+2) EVIDENCE
+- Captured command shows $changeStream opened with "startAtOperationTime": { t: ..., i: 0 }. This option is intended for the very first start, not for routine resumes. Using it to restart at “now” drops all events between the last processed event and that timestamp. In the artifact it uses increment 0 (i:0), which strongly suggests a wall-clock timestamp rather than a previously observed event’s token.
+- No evidence of resumeAfter/startAfter usage or persisted per-stream resume tokens in the artifacts/logs. The absence of a persisted resume token is a common root cause of perceived “missing updates.”
+- Multiple concurrent change streams increase the probability of checkpoint misuse (e.g., sharing a single stored “last token” or storing postBatchResumeToken from one stream and reusing it across others), which can skip events filtered out in one stream but still needed in another.
+- Oplog window >17 days rules out oplog roll-off as the reason events were dropped.
+- Symptom pattern: inserts/deletes are observed but “updates” seem missing. Resume gaps manifest most clearly on the most frequent operation type (usually updates), so the loss skews toward updates.
+
+3) MITIGATION (detailed, actionable)
+- Implement per-stream, durable resume tokens
+  - For each stream (uniquely identified by namespace + pipeline signature), persist the resume token from the last successfully processed change event (_id) in a durable store (e.g., a dedicated checkpoints collection).
+  - Only advance the stored token after the downstream side-effect (i.e., syncing to Stitch) has been durably committed to avoid losing in-flight events during crashes.
+- Use resumeAfter (or startAfter) instead of startAtOperationTime for resuming
+  - On startup: if a stored resume token exists, open the stream with { resumeAfter:  }.
+  - Only use startAtOperationTime for the initial bootstrap when no token exists and you explicitly accept that earlier events are not required. If completeness is required, do an initial catch-up query before opening the stream.
+- Do not share tokens across streams
+  - Maintain one checkpoint per logical stream. If you run multiple watchers (different pipelines/filters), each must have its own resume token storage, and each must persist its own last-seen token.
+- Avoid postBatchResumeToken misuse
+  - Do not persist postBatchResumeToken after you have received events in the batch; persist the last event’s _id you have fully processed. postBatchResumeToken can safely be used only when you have not yet received any event from that stream (e.g., to resume from “end of last batch” when zero events were returned), and never across different streams.
+- Add backpressure-safe, idempotent processing
+  - Ensure the sink (Stitch integration) is idempotent so that resuming from a prior token and reprocessing the last event does not create duplicates or inconsistencies.
+- Instrument and alert
+  - Log operationType counts from the change stream consumer (insert/update/replace/delete) and the current resume token. Alert if updates suddenly drop to zero while other operations continue.
+  - Monitor changeStream and tailable cursor errors, resumptions, and latency.
+
+4) NEXT_STEPS (for the consulting engineer)
+- Collect and review the exact watch() code and aggregate command for all streams:
+  - Confirm whether resumeAfter/startAfter are used; identify any use of startAtOperationTime beyond first bootstrap.
+  - Verify there is no shared checkpoint among streams.
+- Audit the checkpointing logic:
+  - Identify where resume tokens are stored, when they are written, and whether the write happens only after downstream processing commits.
+  - If missing, implement a per-stream durable checkpoint store and modify startup to use resumeAfter.
+- Fault-injection test in staging:
+  - Start streams, drive writes (esp. updates), kill the consumers, restart using the new resume logic, and verify zero event loss and acceptable duplicates (idempotent).
+- Review and simplify pipelines:
+  - Temporarily run a control stream with no $match filters after $changeStream (except ns) to verify that updates are present end-to-end. Compare event counts to the filtered streams.
+- Put monitoring in place:
+  - Add metrics and logs for operationType distribution and last resume token, and set alerts for anomalies (e.g., no updates for N minutes while there is write activity).
+
+5) ALTERNATIVE_HYPOTHESES (if primary is incorrect)
+- Pipeline filtering excludes updates (moderate likelihood)
+  - A $match stage on operationType omits "update", or matches on fields only present for insert/replace (e.g., fullDocument) but not update events. Test by removing filters or explicitly including operationType: { $in: ["insert","update","replace","delete"] } and verifying updates flow.
+- Watching a view or pipeline whose semantics suppress updates (low likelihood; team stated “Only collections”)
+  - Change streams on views only emit events that affect the view result; updates to fields not visible to the view are suppressed. Double-check you are not watching a view or a collection with a post-$changeStream $project/$match that effectively acts like a view.
+- Sharded cluster wiring issue (low-moderate likelihood)
+  - Opening collection-level streams against an individual shard node (not via mongos) can miss events from other shards; or watching different mongos instances with inconsistent checkpointing. Verify connections go through mongos and use a single consistent checkpoint per stream across instances.
+- Server version–specific bug (low likelihood)
+  - Older MongoDB versions had edge-case issues with change streams in sharded environments. Confirm exact server/driver versions; review release notes and SERVER tickets if running <4.4.
+- No-op updates (low likelihood)
+  - Updates that don’t modify the document (nModified:0) don’t generate oplog entries and thus no change events. Sample update commands and result stats; use profiler to confirm whether the “missing” updates were no-ops.
+
+Implementing correct, per-stream resume token handling and eliminating use of startAtOperationTime for routine resumes typically resolves “missing updates” in production change stream consumers.
