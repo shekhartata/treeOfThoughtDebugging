@@ -356,6 +356,79 @@ class TreeOfThoughtEngine:
         self.current_node_id = node.id
         return node
     
+    def should_auto_backtrack(self) -> Optional[Dict]:
+        """
+        Modular auto-backtrack detection logic.
+        Returns None if no backtrack needed, or dict with backtrack recommendation.
+        Does not modify state - only analyzes and recommends.
+        """
+        current_node = self.get_current_node()
+        if not current_node:
+            return None
+        
+        active_hypotheses = [h for h in current_node.hypotheses if h.status == "active"]
+        
+        # Check 1: Dead-end detection - all hypotheses pruned or very low confidence
+        if not active_hypotheses:
+            # Find last node with active hypotheses
+            for node in reversed(self.nodes):
+                if any(h.status == "active" for h in node.hypotheses):
+                    return {
+                        'reason': 'dead_end',
+                        'message': 'All hypotheses have been pruned. No active hypotheses remaining.',
+                        'recommended_node_id': node.id,
+                        'recommended_step': node.step_number
+                    }
+        
+        # Check 2: Very low confidence - all active hypotheses below threshold
+        if active_hypotheses:
+            max_confidence = max(h.confidence for h in active_hypotheses)
+            if max_confidence < 0.15:  # Very low confidence threshold
+                # Find best previous node (highest max confidence)
+                best_node = None
+                best_confidence = 0.0
+                for node in self.nodes:
+                    node_active = [h for h in node.hypotheses if h.status == "active"]
+                    if node_active:
+                        node_max = max(h.confidence for h in node_active)
+                        if node_max > best_confidence and node.step_number < current_node.step_number:
+                            best_confidence = node_max
+                            best_node = node
+                
+                if best_node and best_confidence > max_confidence:
+                    return {
+                        'reason': 'low_confidence',
+                        'message': f'All hypotheses have very low confidence ({max_confidence:.1%}). Previous step had better results.',
+                        'recommended_node_id': best_node.id,
+                        'recommended_step': best_node.step_number,
+                        'current_max_confidence': max_confidence,
+                        'previous_max_confidence': best_confidence
+                    }
+        
+        # Check 3: Stagnation - no improvement in last few steps
+        if len(self.nodes) >= 4:  # Need at least 4 nodes to detect stagnation
+            recent_nodes = sorted(self.nodes, key=lambda n: n.step_number, reverse=True)[:4]
+            recent_confidences = []
+            for node in reversed(recent_nodes):  # Oldest to newest
+                node_active = [h for h in node.hypotheses if h.status == "active"]
+                if node_active:
+                    recent_confidences.append(max(h.confidence for h in node_active))
+            
+            if len(recent_confidences) >= 3:
+                # Check if confidence is declining or stagnant
+                if recent_confidences[-1] <= recent_confidences[0] and recent_confidences[-1] < 0.5:
+                    # Find node before stagnation started
+                    stagnation_start = recent_nodes[0]  # Oldest in recent set
+                    return {
+                        'reason': 'stagnation',
+                        'message': 'No significant improvement in recent steps. Confidence has stagnated or declined.',
+                        'recommended_node_id': stagnation_start.id,
+                        'recommended_step': stagnation_start.step_number,
+                        'confidence_trend': recent_confidences
+                    }
+        
+        return None
+    
     def get_next_requests(self, node: Optional[ReasoningNode] = None) -> List[str]:
         """Generate next data requests using LLM based on current state."""
         node = node or self._get_node(self.current_node_id)

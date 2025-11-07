@@ -303,6 +303,76 @@
             margin-top: 15px;
             border-left: 4px solid #2e7d32;
         }
+        
+        .history-node {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border: 2px solid #e0e0e0;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .history-node:hover {
+            border-color: #667eea;
+            transform: translateX(5px);
+        }
+        
+        .history-node.current {
+            border-color: #4caf50;
+            border-width: 3px;
+            background: #f1f8f4;
+        }
+        
+        .history-node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .node-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .backtrack-btn {
+            background: #2196f3;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        
+        .backtrack-btn:hover {
+            background: #1976d2;
+        }
+        
+        .auto-backtrack-panel {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .auto-backtrack-panel.warning {
+            background: #ffebee;
+            border-left-color: #f44336;
+        }
+        
+        .auto-backtrack-panel.success {
+            background: #e8f5e9;
+            border-left-color: #4caf50;
+        }
     </style>
 </head>
 <body>
@@ -354,8 +424,18 @@
                     <button id="upload-btn" onclick="uploadArtifact()">Upload & Analyze</button>
                 </div>
                 
+                <!-- History and Backtracking Section -->
+                <div class="section" id="history-section" style="margin-top: 20px; display: none;">
+                    <h3>📜 Reasoning History</h3>
+                    <button onclick="toggleHistory()" style="background: #9c27b0; margin-bottom: 15px;">Toggle History View</button>
+                    <div id="history-content" style="display: none;">
+                        <div id="history-nodes"></div>
+                    </div>
+                </div>
+                
                 <div style="margin-top: 20px;">
                     <button onclick="getFinalAnalysis()" style="background: #4caf50;">Get Final Analysis</button>
+                    <button onclick="checkAutoBacktrack()" style="background: #ff9800; margin-left: 10px;">🔍 Check Auto-Backtrack</button>
                     <button onclick="resetSession()" style="background: #f44336; margin-left: 10px;">Reset Session</button>
                 </div>
             </div>
@@ -409,6 +489,7 @@
                 if (response.ok) {
                     document.getElementById('init-section').style.display = 'none';
                     document.getElementById('current-section').style.display = 'block';
+                    document.getElementById('history-section').style.display = 'block';
                     updateCurrentState(data);
                     showMessage('Session initialized successfully!');
                 } else {
@@ -454,6 +535,12 @@
                     // Clear artifact inputs
                     document.getElementById('artifact-name').value = '';
                     document.getElementById('artifact-content').value = '';
+                    
+                    // Reload history if visible
+                    const historyContent = document.getElementById('history-content');
+                    if (historyContent.style.display !== 'none') {
+                        await loadHistory();
+                    }
                     
                     // Check if complete
                     if (data.is_complete) {
@@ -622,6 +709,210 @@
             }
         }
         
+        async function toggleHistory() {
+            const historyContent = document.getElementById('history-content');
+            const isVisible = historyContent.style.display !== 'none';
+            
+            if (isVisible) {
+                historyContent.style.display = 'none';
+            } else {
+                historyContent.style.display = 'block';
+                await loadHistory();
+            }
+        }
+        
+        async function loadHistory() {
+            try {
+                const response = await fetch(`${API_BASE}/history`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayHistory(data.nodes, data.current_node_id);
+                } else {
+                    showMessage(data.error || 'Failed to load history', 'error');
+                }
+            } catch (error) {
+                showMessage('Error loading history: ' + error.message, 'error');
+            }
+        }
+        
+        function displayHistory(nodes, currentNodeId) {
+            const historyDiv = document.getElementById('history-nodes');
+            
+            if (nodes.length === 0) {
+                historyDiv.innerHTML = '<p>No history available yet.</p>';
+                return;
+            }
+            
+            // Sort by step number
+            nodes.sort((a, b) => a.step_number - b.step_number);
+            
+            historyDiv.innerHTML = nodes.map(node => {
+                const isCurrent = node.id === currentNodeId;
+                const artifactsList = node.artifacts && node.artifacts.length > 0
+                    ? node.artifacts.map(a => a.name).join(', ')
+                    : 'None';
+                
+                return `
+                    <div class="history-node ${isCurrent ? 'current' : ''}" onclick="selectNode('${node.id}')">
+                        <div class="history-node-header">
+                            <div>
+                                <strong>Step ${node.step_number}: ${node.id}</strong>
+                                ${isCurrent ? '<span style="color: #4caf50; margin-left: 10px;">● Current</span>' : ''}
+                            </div>
+                            <div style="font-size: 14px; color: #667eea;">
+                                Max Confidence: ${(node.max_confidence * 100).toFixed(0)}%
+                            </div>
+                        </div>
+                        <div class="node-info">
+                            <div><strong>Active Hypotheses:</strong> ${node.active_hypotheses_count}</div>
+                            <div><strong>Total Hypotheses:</strong> ${node.hypotheses_count}</div>
+                            <div><strong>Artifacts:</strong> ${node.artifacts_count}</div>
+                            <div><strong>Children:</strong> ${node.children_ids ? node.children_ids.length : 0}</div>
+                        </div>
+                        ${node.artifacts && node.artifacts.length > 0 ? `
+                            <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                                <strong>Artifacts:</strong> ${artifactsList}
+                            </div>
+                        ` : ''}
+                        ${!isCurrent ? `
+                            <button class="backtrack-btn" onclick="event.stopPropagation(); backtrackToNode('${node.id}')">
+                                Backtrack to This Step
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function selectNode(nodeId) {
+            // Just highlight, don't backtrack yet
+            console.log('Selected node:', nodeId);
+        }
+        
+        async function backtrackToNode(nodeId) {
+            if (!confirm(`Backtrack to step ${nodeId}? This will allow you to explore alternate branches from that point.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/backtrack`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ node_id: nodeId })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showMessage(`Backtracked to ${nodeId}`, 'success');
+                    // Reload current state
+                    const currentResponse = await fetch(`${API_BASE}/current-node`);
+                    if (currentResponse.ok) {
+                        const currentData = await currentResponse.json();
+                        updateCurrentState(currentData);
+                    }
+                    // Reload history to show new current node
+                    await loadHistory();
+                } else {
+                    showMessage(data.error || 'Failed to backtrack', 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            }
+        }
+        
+        async function checkAutoBacktrack() {
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Checking...';
+            
+            try {
+                // First, check for recommendation (don't execute)
+                const checkResponse = await fetch(`${API_BASE}/auto-backtrack`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ execute: false })
+                });
+                
+                const checkData = await checkResponse.json();
+                
+                if (checkResponse.ok) {
+                    if (checkData.should_backtrack) {
+                        // Show recommendation panel
+                        const panel = document.createElement('div');
+                        panel.className = 'auto-backtrack-panel warning';
+                        panel.id = 'auto-backtrack-panel';
+                        panel.innerHTML = `
+                            <h4>🔍 Auto-Backtrack Recommendation</h4>
+                            <p><strong>Reason:</strong> ${checkData.reason}</p>
+                            <p><strong>Message:</strong> ${checkData.message}</p>
+                            <p><strong>Recommended Step:</strong> ${checkData.recommendation.recommended_step} (${checkData.recommendation.recommended_node_id})</p>
+                            <div style="margin-top: 15px;">
+                                <button onclick="executeAutoBacktrack()" style="background: #f44336; margin-right: 10px;">
+                                    Execute Backtrack
+                                </button>
+                                <button onclick="document.getElementById('auto-backtrack-panel').remove()" style="background: #9e9e9e;">
+                                    Dismiss
+                                </button>
+                            </div>
+                        `;
+                        
+                        // Remove existing panel if any
+                        const existing = document.getElementById('auto-backtrack-panel');
+                        if (existing) existing.remove();
+                        
+                        // Insert before buttons
+                        const buttonsDiv = btn.parentElement;
+                        buttonsDiv.insertBefore(panel, btn);
+                    } else {
+                        showMessage(checkData.message || 'No backtrack needed. Current path looks good.', 'success');
+                    }
+                } else {
+                    showMessage(checkData.error || 'Failed to check auto-backtrack', 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        }
+        
+        async function executeAutoBacktrack() {
+            try {
+                const response = await fetch(`${API_BASE}/auto-backtrack`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ execute: true })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.executed) {
+                    showMessage(`Auto-backtracked to step ${data.backtracked_to.step_number} (${data.backtracked_to.node_id})`, 'success');
+                    
+                    // Remove panel
+                    const panel = document.getElementById('auto-backtrack-panel');
+                    if (panel) panel.remove();
+                    
+                    // Reload current state
+                    const currentResponse = await fetch(`${API_BASE}/current-node`);
+                    if (currentResponse.ok) {
+                        const currentData = await currentResponse.json();
+                        updateCurrentState(currentData);
+                    }
+                    // Reload history
+                    await loadHistory();
+                } else {
+                    showMessage(data.error || 'Failed to execute auto-backtrack', 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            }
+        }
+        
         // Load current state on page load
         window.addEventListener('load', async () => {
             try {
@@ -630,6 +921,7 @@
                     const data = await response.json();
                     document.getElementById('init-section').style.display = 'none';
                     document.getElementById('current-section').style.display = 'block';
+                    document.getElementById('history-section').style.display = 'block';
                     updateCurrentState(data);
                 }
             } catch (error) {
