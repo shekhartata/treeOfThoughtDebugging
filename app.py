@@ -249,11 +249,13 @@ def get_tree_summary():
 
 @app.route('/api/history', methods=['GET'])
 def get_history():
-    """Get full history of reasoning nodes."""
+    """Get full history of reasoning nodes with detailed information."""
     global engine
     
     if not engine:
         return jsonify({'error': 'Engine not initialized'}), 400
+    
+    current_node_id = engine.current_node_id
     
     return jsonify({
         'nodes': [
@@ -263,12 +265,63 @@ def get_history():
                 'parent_id': node.parent_id,
                 'children_ids': node.children_ids,
                 'hypotheses_count': len(node.hypotheses),
+                'active_hypotheses_count': len([h for h in node.hypotheses if h.status == "active"]),
                 'artifacts_count': len(node.artifacts_received),
+                'artifacts': [{'name': art['name'], 'timestamp': art['timestamp']} for art in node.artifacts_received],
+                'max_confidence': max([h.confidence for h in node.hypotheses], default=0.0),
+                'is_current': node.id == current_node_id,
                 'timestamp': node.timestamp.isoformat()
             }
             for node in engine.nodes
-        ]
+        ],
+        'current_node_id': current_node_id
     })
+
+@app.route('/api/auto-backtrack', methods=['POST'])
+def auto_backtrack():
+    """Auto-backtrack based on detection logic. Returns recommendation or executes backtrack."""
+    global engine
+    
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    
+    data = request.json or {}
+    execute = data.get('execute', False)  # If True, actually backtrack; if False, just return recommendation
+    
+    try:
+        recommendation = engine.should_auto_backtrack()
+        
+        if not recommendation:
+            return jsonify({
+                'should_backtrack': False,
+                'message': 'No backtrack recommendation. Current path looks good.'
+            })
+        
+        if execute:
+            # Actually perform the backtrack
+            node = engine.backtrack(recommendation['recommended_node_id'])
+            return jsonify({
+                'should_backtrack': True,
+                'executed': True,
+                'reason': recommendation['reason'],
+                'message': recommendation['message'],
+                'backtracked_to': {
+                    'node_id': node.id,
+                    'step_number': node.step_number
+                },
+                'recommendation': recommendation
+            })
+        else:
+            # Just return the recommendation
+            return jsonify({
+                'should_backtrack': True,
+                'executed': False,
+                'reason': recommendation['reason'],
+                'message': recommendation['message'],
+                'recommendation': recommendation
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/reset', methods=['POST'])
 def reset_session():
