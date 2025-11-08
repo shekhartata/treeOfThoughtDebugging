@@ -52,16 +52,26 @@ class Hypothesis:
 
 @dataclass
 class ReasoningNode:
-    """A node in the Tree-of-Thought representing a reasoning step."""
+    """A node in the Tree-of-Thought representing a reasoning step.
+    
+    Each node belongs to a specific hypothesis branch (identified by hypothesis_id).
+    The root node (step 1) has hypothesis_id=None and contains all initial hypotheses.
+    Subsequent nodes belong to specific hypothesis branches.
+    """
     id: str
     step_number: int
-    hypotheses: List[Hypothesis] = field(default_factory=list)
+    hypothesis_id: Optional[str] = None  # Which hypothesis branch this node belongs to (None for root)
+    hypothesis: Optional[Hypothesis] = None  # The hypothesis for this branch (None for root)
     requested_data: List[str] = field(default_factory=list)
     artifacts_received: List[Dict] = field(default_factory=list)
     evaluation_summary: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
     parent_id: Optional[str] = None
     children_ids: List[str] = field(default_factory=list)
+    branch_status: str = "active"  # active, pruned - status of this branch node
+    
+    # Legacy field for backward compatibility (root node only)
+    hypotheses: List[Hypothesis] = field(default_factory=list)
 
 
 class TreeOfThoughtEngine:
@@ -101,11 +111,13 @@ class TreeOfThoughtEngine:
     
     def __init__(self, weights: Optional[Dict[str, float]] = None, llm_integration=None):
         self.nodes: List[ReasoningNode] = []
-        self.current_node_id: Optional[str] = None
+        self.root_node_id: Optional[str] = None  # Root node (contains all initial hypotheses)
+        self.current_branch_ids: List[str] = []  # Currently selected branches for focused evaluation
         self.weights = weights or self.DEFAULT_WEIGHTS.copy()
         self.problem_summary: str = ""
         self.step_counter: int = 0
         self.llm_integration = llm_integration  # LLM integration instance
+        self.all_hypotheses: Dict[str, Hypothesis] = {}  # Track all hypotheses by ID
     
     def initialize(self, problem_summary: str, use_hardcoded_fallback: bool = False) -> ReasoningNode:
         """Initialize the ToT engine with a problem statement.
@@ -197,15 +209,21 @@ class TreeOfThoughtEngine:
             if use_hardcoded_fallback:
                 print("✓ Using hardcoded hypotheses (fallback mode)")
         
+        # Store all hypotheses for branch tracking
+        for hyp in initial_hypotheses:
+            self.all_hypotheses[hyp.id] = hyp
+        
+        # Create root node with all hypotheses
         initial_node = ReasoningNode(
             id="node_1",
             step_number=1,
-            hypotheses=initial_hypotheses,
+            hypothesis_id=None,  # Root node
+            hypotheses=initial_hypotheses,  # All hypotheses in root
             requested_data=requested_data
         )
         
         self.nodes.append(initial_node)
-        self.current_node_id = initial_node.id
+        self.root_node_id = initial_node.id
         
         return initial_node
     
@@ -237,95 +255,250 @@ class TreeOfThoughtEngine:
             "Please provide diagnostic data relevant to the problem"
         ]
     
-    def add_artifact(self, artifact_name: str, artifact_content: str) -> ReasoningNode:
-        """Add an artifact and create a new reasoning node."""
-        if not self.current_node_id:
-            raise ValueError("Engine not initialized. Call initialize() first.")
+    def get_active_branches(self) -> List[Tuple[str, ReasoningNode]]:
+        """
+        Get all active branches using pre-order traversal.
+        Returns list of (hypothesis_id, leaf_node) tuples for each active branch.
+        """
+        if not self.root_node_id:
+            return []
         
-        current_node = self._get_node(self.current_node_id)
-        self.step_counter += 1
+        root_node = self._get_node(self.root_node_id)
+        active_branches = []
         
-        # Create new node as child of current
-        new_node = ReasoningNode(
-            id=f"node_{self.step_counter}",
-            step_number=self.step_counter,
-            parent_id=current_node.id,
-            artifacts_received=[{
-                'name': artifact_name,
-                'content': artifact_content,
-                'timestamp': datetime.now().isoformat()
-            }]
-        )
+        # Get all active hypotheses from root
+        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"]
         
-        # Copy hypotheses from parent
-        new_node.hypotheses = [
-            Hypothesis(
-                id=h.id,
-                description=h.description,
-                category=h.category,
-                prior_score=h.prior_score,
-                evidence=h.evidence.copy(),
-                rule_score=h.rule_score,
-                llm_score=h.llm_score,
-                user_feedback=h.user_feedback,
-                confidence=h.confidence,
-                status=h.status
-            ) for h in current_node.hypotheses if h.status == "active"
+        for hyp in active_hypotheses:
+            # Find the leaf node for this hypothesis branch
+            leaf_node = self._get_branch_leaf(hyp.id)
+            if leaf_node and leaf_node.branch_status == "active":
+                active_branches.append((hyp.id, leaf_node))
+        
+        return active_branches
+    
+    def _get_branch_leaf(self, hypothesis_id: str) -> Optional[ReasoningNode]:
+        """Get the leaf node (most recent node) for a given hypothesis branch."""
+        # Find all nodes for this branch, sorted by step_number
+        branch_nodes = [
+            node for node in self.nodes
+            if node.hypothesis_id == hypothesis_id and node.branch_status == "active"
         ]
         
-        # Evaluate artifacts against hypotheses using LLM (REQUIRED)
+        if not branch_nodes:
+            return None
+        
+        # Return the node with highest step_number (leaf)
+        return max(branch_nodes, key=lambda n: n.step_number)
+    
+    def get_branch_path(self, hypothesis_id: str) -> List[ReasoningNode]:
+        """Get the full path from root to leaf for a given hypothesis branch."""
+        path = []
+        leaf = self._get_branch_leaf(hypothesis_id)
+        
+        if not leaf:
+            # Branch hasn't started yet, just return root
+            if self.root_node_id:
+                return [self._get_node(self.root_node_id)]
+            return []
+        
+        # Build path from leaf to root
+        current = leaf
+        while current:
+            path.insert(0, current)
+            if current.parent_id:
+                current = self._get_node(current.parent_id)
+            else:
+                break
+        
+        return path
+    
+    def get_all_branches_for_ui(self) -> List[Dict]:
+        """
+        Get all branches (active and pruned) for UI display using pre-order traversal.
+        Returns list of branch dictionaries with full path information.
+        """
+        if not self.root_node_id:
+            return []
+        
+        root_node = self._get_node(self.root_node_id)
+        branches = []
+        
+        # Get all hypotheses from root (both active and pruned)
+        all_hypotheses = root_node.hypotheses
+        
+        for hyp in all_hypotheses:
+            branch_path = self.get_branch_path(hyp.id)
+            
+            # Build branch info
+            branch_info = {
+                'hypothesis_id': hyp.id,
+                'hypothesis': {
+                    'id': hyp.id,
+                    'description': hyp.description,
+                    'category': hyp.category,
+                    'confidence': hyp.confidence,
+                    'status': hyp.status
+                },
+                'status': hyp.status,  # active, pruned, accepted
+                'path': [
+                    {
+                        'node_id': node.id,
+                        'step_number': node.step_number,
+                        'artifacts': [art['name'] for art in node.artifacts_received],
+                        'timestamp': node.timestamp.isoformat() if isinstance(node.timestamp, datetime) else node.timestamp
+                    }
+                    for node in branch_path
+                ],
+                'leaf_node_id': branch_path[-1].id if branch_path else None,
+                'depth': len(branch_path)
+            }
+            
+            branches.append(branch_info)
+        
+        return branches
+    
+    def add_artifact(self, artifact_name: str, artifact_content: str, branch_ids: Optional[List[str]] = None) -> List[ReasoningNode]:
+        """
+        Add an artifact and create new nodes in all active branches (or specified branches).
+        
+        Args:
+            artifact_name: Name of the artifact
+            artifact_content: Content of the artifact
+            branch_ids: Optional list of specific hypothesis IDs to evaluate. 
+                       If None, evaluates all active branches.
+        
+        Returns:
+            List of newly created nodes (one per branch)
+        """
+        if not self.root_node_id:
+            raise ValueError("Engine not initialized. Call initialize() first.")
+        
+        # Get active branches to evaluate
+        root_node = self._get_node(self.root_node_id)
+        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"]
+        
+        if branch_ids is not None:
+            active_hypotheses = [h for h in active_hypotheses if h.id in branch_ids]
+        
+        if not active_hypotheses:
+            raise ValueError("No active branches to evaluate. All hypotheses may have been pruned.")
+        
+        # Determine parent nodes for each branch
+        # If this is the first artifact (no branch nodes exist yet), use root as parent
+        # Otherwise, use leaf nodes from existing branches
+        active_branches = []
+        for hyp in active_hypotheses:
+            leaf_node = self._get_branch_leaf(hyp.id)
+            if leaf_node:
+                # Branch already exists, use leaf as parent
+                active_branches.append((hyp.id, leaf_node))
+            else:
+                # First node in this branch, use root as parent
+                active_branches.append((hyp.id, root_node))
+        
+        self.step_counter += 1
+        new_nodes = []
+        
+        # Create new nodes for each active branch
+        for hypothesis_id, parent_node in active_branches:
+            # Get the hypothesis for this branch
+            hypothesis = self.all_hypotheses.get(hypothesis_id)
+            if not hypothesis or hypothesis.status != "active":
+                continue
+            
+            # Create a copy of the hypothesis with current state
+            branch_hypothesis = Hypothesis(
+                id=hypothesis.id,
+                description=hypothesis.description,
+                category=hypothesis.category,
+                prior_score=hypothesis.prior_score,
+                evidence=hypothesis.evidence.copy(),
+                rule_score=hypothesis.rule_score,
+                llm_score=hypothesis.llm_score,
+                user_feedback=hypothesis.user_feedback,
+                confidence=hypothesis.confidence,
+                status=hypothesis.status
+            )
+            
+            # Create new node for this branch
+            new_node = ReasoningNode(
+                id=f"node_{self.step_counter}_{hypothesis_id}",
+                step_number=self.step_counter,
+                hypothesis_id=hypothesis_id,
+                hypothesis=branch_hypothesis,
+                parent_id=parent_node.id,
+                artifacts_received=[{
+                    'name': artifact_name,
+                    'content': artifact_content,
+                    'timestamp': datetime.now().isoformat()
+                }]
+            )
+            
+            new_nodes.append(new_node)
+            parent_node.children_ids.append(new_node.id)
+            self.nodes.append(new_node)
+        
+        # Batch evaluate all branches with LLM in one call
         if not self.llm_integration or not self.llm_integration.use_llm:
             raise ValueError("LLM is required for artifact evaluation. Please ensure OPENAI_API_KEY is set.")
         
         try:
-            evaluation_result = self.llm_integration.evaluate_hypotheses_with_llm(
-                new_node, artifact_content, self.problem_summary
+            # Evaluate all active branches together
+            evaluation_results = self.llm_integration.evaluate_branches_with_llm(
+                new_nodes, artifact_content, self.problem_summary
             )
-            scores = evaluation_result.get('scores', {})
-            evidence_map = evaluation_result.get('evidence', {})
             
-            # Update hypotheses with LLM scores and evidence
-            for hypothesis in new_node.hypotheses:
-                if hypothesis.status == "active":
-                    if hypothesis.category in scores:
-                        hypothesis.llm_score = scores[hypothesis.category]
-                        # Add LLM-generated evidence
-                        if hypothesis.category in evidence_map:
-                            hypothesis.evidence.append(evidence_map[hypothesis.category])
+            # Update each branch's hypothesis with evaluation results
+            for new_node in new_nodes:
+                hyp_id = new_node.hypothesis_id
+                if hyp_id not in evaluation_results:
+                    continue
+                
+                result = evaluation_results[hyp_id]
+                scores = result.get('scores', {})
+                evidence_map = result.get('evidence', {})
+                
+                # Update the hypothesis in the node
+                if new_node.hypothesis:
+                    category = new_node.hypothesis.category
+                    if category in scores:
+                        new_node.hypothesis.llm_score = scores[category]
+                    if category in evidence_map:
+                        new_node.hypothesis.evidence.append(evidence_map[category])
                     
-                    # Update confidence (LLM score is primary now)
-                    hypothesis.update_confidence(self.weights)
+                    # Update confidence
+                    new_node.hypothesis.update_confidence(self.weights)
                     
-                    # Update status based on confidence
-                    # Note: Pruning will be done in prune_hypotheses() to ensure we keep top 2
-                    if hypothesis.confidence >= self.SUCCESS_THRESHOLD:
-                        hypothesis.status = "accepted"
+                    # Update status
+                    if new_node.hypothesis.confidence >= self.SUCCESS_THRESHOLD:
+                        new_node.hypothesis.status = "accepted"
+                    
+                    # Update the master hypothesis tracking
+                    self.all_hypotheses[hyp_id].llm_score = new_node.hypothesis.llm_score
+                    self.all_hypotheses[hyp_id].evidence = new_node.hypothesis.evidence.copy()
+                    self.all_hypotheses[hyp_id].confidence = new_node.hypothesis.confidence
+                    self.all_hypotheses[hyp_id].status = new_node.hypothesis.status
+                    
         except Exception as e:
             logger.error(f"LLM artifact evaluation failed: {e}", exc_info=True)
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Error details: {str(e)}")
             raise ValueError(f"LLM evaluation failed: {e}. Please check your API key and try again.")
         
-        # Update parent's children
-        current_node.children_ids.append(new_node.id)
-        
-        self.nodes.append(new_node)
-        self.current_node_id = new_node.id
-        
-        return new_node
+        return new_nodes
     
     # _evaluate_artifacts() method removed - LLM evaluation is now required
     
-    def prune_hypotheses(self, node_id: Optional[str] = None):
-        """Prune low-confidence hypotheses from a node.
+    def prune_hypotheses(self):
+        """
+        Prune low-confidence hypotheses (branches).
         
         Keeps at least the top 2 highest-scored hypotheses unless their confidence
-        is less than 5% (0.05).
+        is less than 5% (0.05). Prunes entire branches, not just individual nodes.
         """
-        node = self._get_node(node_id or self.current_node_id)
-        
-        # Get all active hypotheses
-        active_hypotheses = [h for h in node.hypotheses if h.status == "active"]
+        root_node = self._get_node(self.root_node_id)
+        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"]
         
         if not active_hypotheses:
             return
@@ -344,105 +517,162 @@ class TreeOfThoughtEngine:
             # If it's in the top 2, only prune if confidence < 5%
             if hypothesis in top_hypotheses:
                 if hypothesis.confidence < MIN_PROTECTED_CONFIDENCE:
-                    hypothesis.status = "pruned"
+                    self.prune_branch(hypothesis.id)
             # Otherwise, prune if below normal threshold
             else:
                 if hypothesis.confidence < self.PRUNE_THRESHOLD:
-                    hypothesis.status = "pruned"
+                    self.prune_branch(hypothesis.id)
     
-    def backtrack(self, node_id: str) -> ReasoningNode:
-        """Backtrack to a previous node to explore alternate branches."""
-        node = self._get_node(node_id)
-        self.current_node_id = node.id
-        return node
+    def prune_branch(self, hypothesis_id: str):
+        """
+        Prune an entire branch by marking all nodes in that branch as pruned.
+        The branch is kept in memory but excluded from active traversal.
+        """
+        hypothesis = self.all_hypotheses.get(hypothesis_id)
+        if hypothesis:
+            hypothesis.status = "pruned"
+        
+        # Mark all nodes in this branch as pruned
+        for node in self.nodes:
+            if node.hypothesis_id == hypothesis_id:
+                node.branch_status = "pruned"
+        
+        # Also update root node's hypothesis list
+        root_node = self._get_node(self.root_node_id)
+        for hyp in root_node.hypotheses:
+            if hyp.id == hypothesis_id:
+                hyp.status = "pruned"
+                break
+    
+    def unprune_branch(self, hypothesis_id: str):
+        """Unprune a branch, making it active again."""
+        hypothesis = self.all_hypotheses.get(hypothesis_id)
+        if hypothesis:
+            hypothesis.status = "active"
+        
+        # Mark all nodes in this branch as active
+        for node in self.nodes:
+            if node.hypothesis_id == hypothesis_id:
+                node.branch_status = "active"
+        
+        # Also update root node's hypothesis list
+        root_node = self._get_node(self.root_node_id)
+        for hyp in root_node.hypotheses:
+            if hyp.id == hypothesis_id:
+                hyp.status = "active"
+                break
+    
+    def backtrack(self, node_id: Optional[str] = None, hypothesis_id: Optional[str] = None) -> ReasoningNode:
+        """
+        Backtrack to a previous node or set focus on a specific branch.
+        
+        Args:
+            node_id: Specific node to backtrack to
+            hypothesis_id: Focus on a specific hypothesis branch (sets current_branch_ids)
+        
+        Returns:
+            The node that was backtracked to, or the leaf node of the specified branch
+        """
+        if node_id:
+            node = self._get_node(node_id)
+            # Set current branch focus to this node's branch
+            if node.hypothesis_id:
+                self.current_branch_ids = [node.hypothesis_id]
+            return node
+        elif hypothesis_id:
+            # Focus on specific branch
+            self.current_branch_ids = [hypothesis_id]
+            leaf = self._get_branch_leaf(hypothesis_id)
+            return leaf if leaf else self._get_node(self.root_node_id)
+        else:
+            raise ValueError("Either node_id or hypothesis_id must be provided")
     
     def should_auto_backtrack(self) -> Optional[Dict]:
         """
-        Modular auto-backtrack detection logic.
+        Modular auto-backtrack detection logic for branch-based structure.
         Returns None if no backtrack needed, or dict with backtrack recommendation.
         Does not modify state - only analyzes and recommends.
         """
-        current_node = self.get_current_node()
-        if not current_node:
+        root_node = self.get_current_node()
+        if not root_node:
             return None
         
-        active_hypotheses = [h for h in current_node.hypotheses if h.status == "active"]
+        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"]
         
-        # Check 1: Dead-end detection - all hypotheses pruned or very low confidence
+        # Check 1: Dead-end detection - all hypotheses pruned
         if not active_hypotheses:
-            # Find last node with active hypotheses
-            for node in reversed(self.nodes):
-                if any(h.status == "active" for h in node.hypotheses):
-                    return {
-                        'reason': 'dead_end',
-                        'message': 'All hypotheses have been pruned. No active hypotheses remaining.',
-                        'recommended_node_id': node.id,
-                        'recommended_step': node.step_number
-                    }
+            return {
+                'reason': 'dead_end',
+                'message': 'All hypotheses have been pruned. No active hypotheses remaining.',
+                'recommended_hypothesis_id': None
+            }
         
         # Check 2: Very low confidence - all active hypotheses below threshold
         if active_hypotheses:
             max_confidence = max(h.confidence for h in active_hypotheses)
             if max_confidence < 0.15:  # Very low confidence threshold
-                # Find best previous node (highest max confidence)
-                best_node = None
+                # Find best previous step by looking at branch histories
+                best_hyp_id = None
                 best_confidence = 0.0
-                for node in self.nodes:
-                    node_active = [h for h in node.hypotheses if h.status == "active"]
-                    if node_active:
-                        node_max = max(h.confidence for h in node_active)
-                        if node_max > best_confidence and node.step_number < current_node.step_number:
-                            best_confidence = node_max
-                            best_node = node
+                for hyp in active_hypotheses:
+                    branch_path = self.get_branch_path(hyp.id)
+                    # Look for earlier nodes with higher confidence
+                    for node in reversed(branch_path):
+                        if node.hypothesis and node.hypothesis.confidence > best_confidence:
+                            best_confidence = node.hypothesis.confidence
+                            best_hyp_id = hyp.id
                 
-                if best_node and best_confidence > max_confidence:
+                if best_hyp_id and best_confidence > max_confidence:
                     return {
                         'reason': 'low_confidence',
-                        'message': f'All hypotheses have very low confidence ({max_confidence:.1%}). Previous step had better results.',
-                        'recommended_node_id': best_node.id,
-                        'recommended_step': best_node.step_number,
+                        'message': f'All hypotheses have very low confidence ({max_confidence:.1%}). Previous steps had better results.',
+                        'recommended_hypothesis_id': best_hyp_id,
                         'current_max_confidence': max_confidence,
                         'previous_max_confidence': best_confidence
                     }
         
-        # Check 3: Stagnation - no improvement in last few steps
-        if len(self.nodes) >= 4:  # Need at least 4 nodes to detect stagnation
-            recent_nodes = sorted(self.nodes, key=lambda n: n.step_number, reverse=True)[:4]
+        # Check 3: Stagnation - no improvement in recent steps
+        if len(self.nodes) >= 4:
+            # Get recent step numbers
+            recent_steps = sorted(set(n.step_number for n in self.nodes), reverse=True)[:4]
             recent_confidences = []
-            for node in reversed(recent_nodes):  # Oldest to newest
-                node_active = [h for h in node.hypotheses if h.status == "active"]
-                if node_active:
-                    recent_confidences.append(max(h.confidence for h in node_active))
+            for step in reversed(recent_steps):
+                # Get max confidence across all active branches at this step
+                step_nodes = [n for n in self.nodes if n.step_number == step and n.hypothesis and n.branch_status == "active"]
+                if step_nodes:
+                    step_max = max(n.hypothesis.confidence for n in step_nodes)
+                    recent_confidences.append(step_max)
             
             if len(recent_confidences) >= 3:
                 # Check if confidence is declining or stagnant
                 if recent_confidences[-1] <= recent_confidences[0] and recent_confidences[-1] < 0.5:
-                    # Find node before stagnation started
-                    stagnation_start = recent_nodes[0]  # Oldest in recent set
                     return {
                         'reason': 'stagnation',
                         'message': 'No significant improvement in recent steps. Confidence has stagnated or declined.',
-                        'recommended_node_id': stagnation_start.id,
-                        'recommended_step': stagnation_start.step_number,
                         'confidence_trend': recent_confidences
                     }
         
         return None
     
-    def get_next_requests(self, node: Optional[ReasoningNode] = None) -> List[str]:
-        """Generate next data requests using LLM based on current state."""
-        node = node or self._get_node(self.current_node_id)
+    def get_next_requests(self) -> List[str]:
+        """Generate next data requests using LLM based on current state of all active branches."""
+        root_node = self.get_current_node()
+        if not root_node:
+            raise ValueError("Engine not initialized")
         
         # LLM is REQUIRED for generating requests
         if not self.llm_integration or not self.llm_integration.use_llm:
             raise ValueError("LLM is required for generating next requests. Please ensure OPENAI_API_KEY is set.")
         
         try:
-            requests = self.llm_integration.generate_next_requests_llm(node, self.problem_summary)
+            # Get all active branch leaf nodes for context
+            active_branches = self.get_active_branches()
+            # Use root node for request generation (contains all hypotheses)
+            requests = self.llm_integration.generate_next_requests_llm(root_node, self.problem_summary)
             # Add to requested_data to track what we've asked for
             for req in requests:
-                if req not in node.requested_data:
-                    node.requested_data.append(req)
+                if req not in root_node.requested_data:
+                    root_node.requested_data.append(req)
             return requests
         except Exception as e:
             logger.error(f"LLM next requests generation failed: {e}", exc_info=True)
@@ -458,49 +688,50 @@ class TreeOfThoughtEngine:
         raise ValueError(f"Node {node_id} not found")
     
     def get_current_node(self) -> Optional[ReasoningNode]:
-        """Get the current active node."""
-        if not self.current_node_id:
+        """Get the current active node (root node for branch-based structure)."""
+        if not self.root_node_id:
             return None
-        return self._get_node(self.current_node_id)
+        return self._get_node(self.root_node_id)
     
     def get_tree_summary(self) -> Dict:
         """Get a summary of the reasoning tree."""
+        root_node = self._get_node(self.root_node_id) if self.root_node_id else None
+        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"] if root_node else []
+        pruned_hypotheses = [h for h in root_node.hypotheses if h.status == "pruned"] if root_node else []
+        accepted_hypotheses = [h for h in root_node.hypotheses if h.status == "accepted"] if root_node else []
+        
         return {
             'total_nodes': len(self.nodes),
             'current_step': self.step_counter,
             'problem_summary': self.problem_summary,
-            'active_hypotheses': sum(
-                1 for n in self.nodes 
-                for h in n.hypotheses 
-                if h.status == "active"
-            ),
-            'pruned_hypotheses': sum(
-                1 for n in self.nodes 
-                for h in n.hypotheses 
-                if h.status == "pruned"
-            ),
-            'accepted_hypotheses': sum(
-                1 for n in self.nodes 
-                for h in n.hypotheses 
-                if h.status == "accepted"
-            )
+            'active_hypotheses': len(active_hypotheses),
+            'pruned_hypotheses': len(pruned_hypotheses),
+            'accepted_hypotheses': len(accepted_hypotheses),
+            'active_branches': len(active_hypotheses)
         }
     
     def is_complete(self) -> bool:
         """Check if reasoning is complete (sufficient data gathered)."""
-        node = self.get_current_node()
-        if not node:
+        root_node = self.get_current_node()
+        if not root_node:
             return False
         
-        active_hypotheses = [h for h in node.hypotheses if h.status == "active"]
+        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"]
+        accepted_hypotheses = [h for h in root_node.hypotheses if h.status == "accepted"]
         
         # Check if we have accepted hypotheses with high confidence
-        accepted = [h for h in node.hypotheses if h.status == "accepted"]
-        if accepted and len(accepted) > 0:
+        if accepted_hypotheses:
             return True
         
         # Check if we've gathered enough data and narrowed down hypotheses
-        if len(active_hypotheses) <= 2 and len(node.artifacts_received) >= 3:
+        # Count total artifacts across all active branches
+        total_artifacts = sum(
+            len(node.artifacts_received) 
+            for node in self.nodes 
+            if node.hypothesis_id and node.branch_status == "active"
+        )
+        
+        if len(active_hypotheses) <= 2 and total_artifacts >= 3:
             return True
         
         return False

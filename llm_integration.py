@@ -241,6 +241,158 @@ Be specific about what evidence you found in the artifact that relates to each h
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Error details: {str(e)}")
             raise ValueError(f"LLM evaluation failed: {e}. Please check your API key and try again.")
+    
+    def evaluate_branches_with_llm(self, branch_nodes: List[ReasoningNode], artifact_content: str, problem_summary: str) -> Dict[str, Dict]:
+        """
+        Evaluate multiple hypothesis branches in one LLM call (hybrid approach).
+        
+        Args:
+            branch_nodes: List of nodes, one per active branch
+            artifact_content: The artifact content to evaluate
+            problem_summary: The original problem summary
+        
+        Returns:
+            Dict mapping hypothesis_id to evaluation results (scores, evidence)
+        """
+        if not self.use_llm:
+            raise ValueError("LLM is required for artifact evaluation but not available.")
+        
+        try:
+            from openai import OpenAI
+            import re
+            client = OpenAI(api_key=self.api_key)
+            
+            # Build context for all branches
+            branches_text = []
+            for node in branch_nodes:
+                if node.hypothesis and node.hypothesis_id:
+                    branches_text.append(
+                        f"BRANCH {node.hypothesis_id}:\n"
+                        f"  Hypothesis: {node.hypothesis.description}\n"
+                        f"  Category: {node.hypothesis.category}\n"
+                        f"  Current Confidence: {node.hypothesis.confidence:.2f}\n"
+                        f"  Evidence So Far: {', '.join(node.hypothesis.evidence[-3:]) if node.hypothesis.evidence else 'None'}\n"
+                    )
+            
+            branches_context = "\n".join(branches_text)
+            
+            prompt = f"""You are an expert MongoDB consultant evaluating diagnostic data across multiple hypothesis branches.
+
+Problem Summary:
+{problem_summary}
+
+Active Hypothesis Branches:
+{branches_context}
+
+New Artifact Received:
+{artifact_content[:3000]}
+
+Based on this new evidence, evaluate EACH branch independently:
+
+For EACH branch, provide:
+1. Updated confidence score (0.0-1.0) for that specific hypothesis
+2. Specific evidence found in the artifact that relates to that hypothesis
+3. Whether this evidence supports, contradicts, or is neutral for that hypothesis
+
+Format your response as:
+BRANCH_EVALUATIONS:
+BRANCH [hypothesis_id]:
+  Confidence: [0.0-1.0]
+  Evidence: [specific evidence found]
+  Status: [supported/contradicted/neutral]
+
+BRANCH [next_hypothesis_id]:
+  ...
+
+EVIDENCE_SUMMARY:
+[Summary of key findings from the artifact across all branches]
+
+Be specific about what evidence you found in the artifact that relates to each hypothesis branch."""
+            
+            response = client.chat.completions.create(
+                model="gpt-5",
+                messages=[
+                    {"role": "system", "content": "You are an expert MongoDB consultant. Provide detailed, structured analysis of diagnostic data across multiple hypothesis branches."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_completion_tokens=8000
+            )
+            
+            llm_output = response.choices[0].message.content
+            
+            # Check if content is empty
+            if not llm_output or llm_output.strip() == '':
+                logger.warning(f"Empty content from GPT-5. Finish reason: {response.choices[0].finish_reason}")
+                if hasattr(response.choices[0].message, 'reasoning') and response.choices[0].message.reasoning:
+                    llm_output = response.choices[0].message.reasoning
+                    logger.info("Using reasoning content as fallback")
+                else:
+                    raise ValueError("GPT-5 returned empty content.")
+            
+            # Parse evaluation results for each branch
+            results = {}
+            current_branch_id = None
+            
+            lines = llm_output.split('\n')
+            in_evaluations = False
+            
+            for line in lines:
+                line = line.strip()
+                if 'BRANCH_EVALUATIONS:' in line.upper():
+                    in_evaluations = True
+                    continue
+                if 'EVIDENCE_SUMMARY:' in line.upper():
+                    in_evaluations = False
+                    continue
+                
+                if in_evaluations:
+                    # Check if this is a new branch header
+                    branch_match = re.search(r'BRANCH\s+([^\s:]+)', line, re.IGNORECASE)
+                    if branch_match:
+                        current_branch_id = branch_match.group(1).strip()
+                        results[current_branch_id] = {'scores': {}, 'evidence': {}}
+                        continue
+                    
+                    # Parse confidence and evidence for current branch
+                    if current_branch_id:
+                        confidence_match = re.search(r'Confidence:\s*([\d.]+)', line, re.IGNORECASE)
+                        evidence_match = re.search(r'Evidence:\s*(.+?)(?:\s*Status:|$)', line, re.IGNORECASE)
+                        
+                        if confidence_match:
+                            score = float(confidence_match.group(1))
+                            score = min(1.0, max(0.0, score / 10.0 if score > 1 else score))
+                            
+                            # Find the node for this branch to get category
+                            for node in branch_nodes:
+                                if node.hypothesis_id == current_branch_id and node.hypothesis:
+                                    category = node.hypothesis.category
+                                    results[current_branch_id]['scores'][category] = score
+                                    if evidence_match:
+                                        results[current_branch_id]['evidence'][category] = evidence_match.group(1).strip()
+                                    break
+            
+            # Fallback: if parsing failed, try to extract from text
+            if not results:
+                for node in branch_nodes:
+                    if node.hypothesis:
+                        hyp_id = node.hypothesis_id
+                        category = node.hypothesis.category
+                        results[hyp_id] = {'scores': {}, 'evidence': {}}
+                        
+                        # Try to find confidence for this category
+                        pattern = rf"{category}.*?(\d+\.?\d*)"
+                        match = re.search(pattern, llm_output.lower())
+                        if match:
+                            score = float(match.group(1))
+                            results[hyp_id]['scores'][category] = min(1.0, max(0.0, score / 10.0 if score > 1 else score))
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"LLM branch evaluation failed: {e}", exc_info=True)
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Error details: {str(e)}")
+            raise ValueError(f"LLM branch evaluation failed: {e}. Please check your API key and try again.")
 
     def generate_hypotheses_from_llm(self, problem_summary: str) -> List[Dict]:
         """Generate initial hypotheses from LLM. This is the PRIMARY method."""

@@ -68,16 +68,23 @@ def demo():
     }
     """
     try:
-        node1 = engine.add_artifact("db.currentOp() output", artifact1)
+        # add_artifact now returns list of nodes (one per branch)
+        nodes1 = engine.add_artifact("db.currentOp() output", artifact1)
+        engine.prune_hypotheses()
     except ValueError as e:
         print(f"   ✗ Error: {e}")
         return
-    print(f"   Step: {node1.step_number}")
-    print(f"   Active hypotheses: {sum(1 for h in node1.hypotheses if h.status == 'active')}")
+    print(f"   Created {len(nodes1)} nodes across branches")
     
-    for h in node1.hypotheses:
-        if h.status == "active" and h.evidence:
-            print(f"   - {h.description}: confidence {h.confidence:.2%}, evidence: {h.evidence[-1]}")
+    # Get root node to show hypotheses
+    root_node = engine.get_current_node()
+    if root_node:
+        active_count = sum(1 for h in root_node.hypotheses if h.status == 'active')
+        print(f"   Active branches: {active_count}")
+        
+        for h in root_node.hypotheses:
+            if h.status == "active" and h.evidence:
+                print(f"   - {h.description}: confidence {h.confidence:.2%}, evidence: {h.evidence[-1]}")
     
     # Simulate artifact upload 2
     print("\n4. Uploading artifact: getIndexes() output")
@@ -93,22 +100,26 @@ def demo():
     }
     """
     try:
-        node2 = engine.add_artifact("getIndexes() output", artifact2)
+        nodes2 = engine.add_artifact("getIndexes() output", artifact2)
+        engine.prune_hypotheses()
     except ValueError as e:
         print(f"   ✗ Error: {e}")
         return
-    print(f"   Step: {node2.step_number}")
+    print(f"   Created {len(nodes2)} nodes across branches")
     
-    for h in node2.hypotheses:
-        if h.status == "active":
-            print(f"   - {h.description}: confidence {h.confidence:.2%}")
-            if h.evidence:
-                print(f"     Evidence: {', '.join(h.evidence)}")
+    # Get root node to show updated hypotheses
+    root_node = engine.get_current_node()
+    if root_node:
+        for h in root_node.hypotheses:
+            if h.status == "active":
+                print(f"   - {h.description}: confidence {h.confidence:.2%}")
+                if h.evidence:
+                    print(f"     Evidence: {', '.join(h.evidence[-2:])}")
     
     # Get next requests
     print("\n5. Next data requests:")
     try:
-        next_reqs = engine.get_next_requests(node2)
+        next_reqs = engine.get_next_requests()
         for req in next_reqs[:3]:
             print(f"   - {req}")
     except ValueError as e:

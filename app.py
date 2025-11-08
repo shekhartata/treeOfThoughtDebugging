@@ -81,7 +81,7 @@ def initialize():
 
 @app.route('/api/upload-artifact', methods=['POST'])
 def upload_artifact():
-    """Upload an artifact and process it."""
+    """Upload an artifact and process it across all active branches."""
     global engine
     
     if not engine:
@@ -90,53 +90,71 @@ def upload_artifact():
     data = request.json
     artifact_name = data.get('artifact_name', 'Unknown Artifact')
     artifact_content = data.get('artifact_content', '')
+    branch_ids = data.get('branch_ids', None)  # Optional: specific branches to evaluate
     
     if not artifact_content:
         return jsonify({'error': 'Artifact content is required'}), 400
     
     # Add artifact to engine (LLM evaluation is required)
+    # This creates nodes in all active branches (or specified branches)
     try:
-        new_node = engine.add_artifact(artifact_name, artifact_content)
+        new_nodes = engine.add_artifact(artifact_name, artifact_content, branch_ids=branch_ids)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
-    # Prune low-confidence hypotheses
+    # Prune low-confidence hypotheses (branches)
     engine.prune_hypotheses()
     
     # Get next requests (LLM is required)
     try:
-        next_requests = engine.get_next_requests(new_node)
+        next_requests = engine.get_next_requests()
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
     # Check if complete
     is_complete = engine.is_complete()
     
+    # Build response with all branches
+    root_node = engine.get_current_node()
+    
     return jsonify({
         'success': True,
-        'node': {
-            'id': new_node.id,
-            'step_number': new_node.step_number,
-            'hypotheses': [
-                {
-                    'id': h.id,
-                    'description': h.description,
-                    'category': h.category,
-                    'confidence': h.confidence,
-                    'status': h.status,
-                    'evidence': h.evidence
-                }
-                for h in new_node.hypotheses
-            ],
-            'requested_data': next_requests,
-            'artifacts_received': [
-                {
-                    'name': art['name'],
-                    'timestamp': art['timestamp']
-                }
-                for art in new_node.artifacts_received
-            ]
-        },
+        'nodes_created': len(new_nodes),
+        'branches': [
+            {
+                'hypothesis_id': node.hypothesis_id,
+                'node_id': node.id,
+                'step_number': node.step_number,
+                'hypothesis': {
+                    'id': node.hypothesis.id if node.hypothesis else None,
+                    'description': node.hypothesis.description if node.hypothesis else None,
+                    'category': node.hypothesis.category if node.hypothesis else None,
+                    'confidence': node.hypothesis.confidence if node.hypothesis else 0.0,
+                    'status': node.hypothesis.status if node.hypothesis else 'unknown',
+                    'evidence': node.hypothesis.evidence if node.hypothesis else []
+                },
+                'artifacts_received': [
+                    {
+                        'name': art['name'],
+                        'timestamp': art['timestamp']
+                    }
+                    for art in node.artifacts_received
+                ]
+            }
+            for node in new_nodes
+        ],
+        'all_hypotheses': [
+            {
+                'id': h.id,
+                'description': h.description,
+                'category': h.category,
+                'confidence': h.confidence,
+                'status': h.status,
+                'evidence': h.evidence
+            }
+            for h in root_node.hypotheses
+        ] if root_node else [],
+        'requested_data': next_requests,
         'tree_summary': engine.get_tree_summary(),
         'is_complete': is_complete,
         'next_requests': next_requests
@@ -183,7 +201,7 @@ def get_current_node():
 
 @app.route('/api/backtrack', methods=['POST'])
 def backtrack():
-    """Backtrack to a previous node."""
+    """Backtrack to a previous node or focus on a specific branch."""
     global engine
     
     if not engine:
@@ -191,17 +209,37 @@ def backtrack():
     
     data = request.json
     node_id = data.get('node_id')
+    hypothesis_id = data.get('hypothesis_id')
     
-    if not node_id:
-        return jsonify({'error': 'Node ID is required'}), 400
+    if not node_id and not hypothesis_id:
+        return jsonify({'error': 'Either node_id or hypothesis_id is required'}), 400
     
     try:
-        node = engine.backtrack(node_id)
+        node = engine.backtrack(node_id=node_id, hypothesis_id=hypothesis_id)
+        
+        # Get branch information if hypothesis_id was provided
+        branch_info = None
+        if hypothesis_id:
+            branch_path = engine.get_branch_path(hypothesis_id)
+            branch_info = {
+                'hypothesis_id': hypothesis_id,
+                'path_length': len(branch_path),
+                'leaf_node_id': branch_path[-1].id if branch_path else None
+            }
+        
         return jsonify({
             'success': True,
             'node': {
                 'id': node.id,
                 'step_number': node.step_number,
+                'hypothesis_id': node.hypothesis_id,
+                'hypothesis': {
+                    'id': node.hypothesis.id if node.hypothesis else None,
+                    'description': node.hypothesis.description if node.hypothesis else None,
+                    'category': node.hypothesis.category if node.hypothesis else None,
+                    'confidence': node.hypothesis.confidence if node.hypothesis else 0.0,
+                    'status': node.hypothesis.status if node.hypothesis else 'unknown'
+                } if node.hypothesis else None,
                 'hypotheses': [
                     {
                         'id': h.id,
@@ -211,8 +249,10 @@ def backtrack():
                         'status': h.status
                     }
                     for h in node.hypotheses
-                ]
-            }
+                ] if hasattr(node, 'hypotheses') and node.hypotheses else []
+            },
+            'branch_info': branch_info,
+            'current_branch_ids': engine.current_branch_ids
         })
     except ValueError as e:
         return jsonify({'error': str(e)}), 404
@@ -249,32 +289,39 @@ def get_tree_summary():
 
 @app.route('/api/history', methods=['GET'])
 def get_history():
-    """Get full history of reasoning nodes with detailed information."""
+    """Get full history of reasoning nodes with detailed information (branch-based)."""
     global engine
     
     if not engine:
         return jsonify({'error': 'Engine not initialized'}), 400
-    
-    current_node_id = engine.current_node_id
     
     return jsonify({
         'nodes': [
             {
                 'id': node.id,
                 'step_number': node.step_number,
+                'hypothesis_id': node.hypothesis_id,
                 'parent_id': node.parent_id,
                 'children_ids': node.children_ids,
-                'hypotheses_count': len(node.hypotheses),
-                'active_hypotheses_count': len([h for h in node.hypotheses if h.status == "active"]),
+                'branch_status': node.branch_status,
+                'hypothesis': {
+                    'id': node.hypothesis.id if node.hypothesis else None,
+                    'description': node.hypothesis.description if node.hypothesis else None,
+                    'category': node.hypothesis.category if node.hypothesis else None,
+                    'confidence': node.hypothesis.confidence if node.hypothesis else 0.0,
+                    'status': node.hypothesis.status if node.hypothesis else 'unknown'
+                } if node.hypothesis else None,
+                'hypotheses_count': len(node.hypotheses) if hasattr(node, 'hypotheses') and node.hypotheses else 0,
+                'active_hypotheses_count': len([h for h in node.hypotheses if h.status == "active"]) if hasattr(node, 'hypotheses') and node.hypotheses else 0,
                 'artifacts_count': len(node.artifacts_received),
                 'artifacts': [{'name': art['name'], 'timestamp': art['timestamp']} for art in node.artifacts_received],
-                'max_confidence': max([h.confidence for h in node.hypotheses], default=0.0),
-                'is_current': node.id == current_node_id,
-                'timestamp': node.timestamp.isoformat()
+                'confidence': node.hypothesis.confidence if node.hypothesis else 0.0,
+                'timestamp': node.timestamp.isoformat() if isinstance(node.timestamp, datetime) else str(node.timestamp)
             }
             for node in engine.nodes
         ],
-        'current_node_id': current_node_id
+        'root_node_id': engine.root_node_id,
+        'current_branch_ids': engine.current_branch_ids
     })
 
 @app.route('/api/auto-backtrack', methods=['POST'])
@@ -299,7 +346,14 @@ def auto_backtrack():
         
         if execute:
             # Actually perform the backtrack
-            node = engine.backtrack(recommendation['recommended_node_id'])
+            # Check if recommendation has hypothesis_id (branch-based) or node_id (legacy)
+            if 'recommended_hypothesis_id' in recommendation:
+                node = engine.backtrack(hypothesis_id=recommendation['recommended_hypothesis_id'])
+            elif 'recommended_node_id' in recommendation:
+                node = engine.backtrack(node_id=recommendation['recommended_node_id'])
+            else:
+                return jsonify({'error': 'Invalid recommendation format'}), 400
+                
             return jsonify({
                 'should_backtrack': True,
                 'executed': True,
@@ -307,7 +361,8 @@ def auto_backtrack():
                 'message': recommendation['message'],
                 'backtracked_to': {
                     'node_id': node.id,
-                    'step_number': node.step_number
+                    'step_number': node.step_number,
+                    'hypothesis_id': node.hypothesis_id
                 },
                 'recommendation': recommendation
             })
@@ -320,6 +375,75 @@ def auto_backtrack():
                 'message': recommendation['message'],
                 'recommendation': recommendation
             })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/branches', methods=['GET'])
+def get_all_branches():
+    """Get all branches (active and pruned) for UI display using pre-order traversal."""
+    global engine
+    
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    
+    try:
+        branches = engine.get_all_branches_for_ui()
+        return jsonify({
+            'branches': branches,
+            'active_count': len([b for b in branches if b['status'] == 'active']),
+            'pruned_count': len([b for b in branches if b['status'] == 'pruned']),
+            'accepted_count': len([b for b in branches if b['status'] == 'accepted'])
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/prune-branch', methods=['POST'])
+def prune_branch():
+    """Prune a specific branch (mark as pruned but keep in memory)."""
+    global engine
+    
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    
+    data = request.json
+    hypothesis_id = data.get('hypothesis_id')
+    
+    if not hypothesis_id:
+        return jsonify({'error': 'hypothesis_id is required'}), 400
+    
+    try:
+        engine.prune_branch(hypothesis_id)
+        return jsonify({
+            'success': True,
+            'message': f'Branch {hypothesis_id} pruned successfully',
+            'hypothesis_id': hypothesis_id,
+            'tree_summary': engine.get_tree_summary()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/unprune-branch', methods=['POST'])
+def unprune_branch():
+    """Unprune a branch (restore it to active status)."""
+    global engine
+    
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    
+    data = request.json
+    hypothesis_id = data.get('hypothesis_id')
+    
+    if not hypothesis_id:
+        return jsonify({'error': 'hypothesis_id is required'}), 400
+    
+    try:
+        engine.unprune_branch(hypothesis_id)
+        return jsonify({
+            'success': True,
+            'message': f'Branch {hypothesis_id} restored to active',
+            'hypothesis_id': hypothesis_id,
+            'tree_summary': engine.get_tree_summary()
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
