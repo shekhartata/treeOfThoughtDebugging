@@ -373,6 +373,221 @@
             background: #e8f5e9;
             border-left-color: #4caf50;
         }
+        
+        /* Custom CSS Tree visualization styles */
+        #tree-network {
+            width: 100%;
+            min-height: 400px;
+            max-height: 80vh;
+            padding: 20px;
+            overflow-x: auto;
+            overflow-y: auto;
+            background: #fafafa;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+        }
+        
+        .tree-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .tree-node {
+            position: relative;
+            margin: 20px 0;
+            min-width: 250px;
+        }
+        
+        .tree-node-content {
+            background: white;
+            border: 3px solid #4caf50;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            position: relative;
+            z-index: 2;
+        }
+        
+        .tree-node-content.current {
+            border-color: #9c27b0;
+            background: #f3e5f5;
+        }
+        
+        .tree-node-content.pruned {
+            border-color: #f44336;
+            background: #ffebee;
+            opacity: 0.8;
+        }
+        
+        .tree-node-content.accepted {
+            border-color: #2196f3;
+            background: #e3f2fd;
+        }
+        
+        .tree-node-header {
+            font-weight: 600;
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
+        
+        .tree-node-badges {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .tree-badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            color: white;
+        }
+        
+        .badge-artifact {
+            background: #667eea;
+        }
+        
+        .badge-current {
+            background: #4caf50;
+        }
+        
+        .tree-node-info {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 6px;
+        }
+        
+        .tree-node-meta {
+            font-size: 11px;
+            color: #888;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .tree-node-button {
+            margin-top: 12px;
+            width: 100%;
+            background: #2196f3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .tree-node-button:hover {
+            background: #1976d2;
+        }
+        
+        .tree-node-button:active {
+            background: #1565c0;
+        }
+        
+        .tree-children {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-top: 20px;
+            position: relative;
+            padding-top: 20px;
+        }
+        
+        .tree-children::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            right: 50%;
+            height: 20px;
+            border-left: 2px solid #9e9e9e;
+            border-right: 2px solid #9e9e9e;
+        }
+        
+        .tree-node::before {
+            content: '';
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            width: 2px;
+            height: 20px;
+            background: #9e9e9e;
+            z-index: 1;
+        }
+        
+        .tree-node:first-child::before {
+            display: none;
+        }
+        
+        .tree-branch {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+        
+        .tree-branch::before {
+            content: '';
+            position: absolute;
+            top: -20px;
+            width: 2px;
+            height: 20px;
+            background: #9e9e9e;
+        }
+        
+        .tree-connector {
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            width: 2px;
+            height: 20px;
+            background: #9e9e9e;
+            z-index: 1;
+        }
+        
+        .tree-controls {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .tree-controls button {
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+        
+        .tree-legend {
+            margin-top: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            font-size: 12px;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
     </style>
 </head>
 <body>
@@ -413,6 +628,20 @@
                 
                 <div class="artifact-upload" id="artifact-section">
                     <h3>📎 Upload Artifact</h3>
+                    <div id="focused-mode-indicator" style="display: none; background: #fff3cd; border: 2px solid #ffc107; border-radius: 6px; padding: 12px; margin-bottom: 15px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <div>
+                                <strong>🎯 Focused Mode Active</strong>
+                                <p style="margin: 5px 0 0 0; font-size: 13px; color: #666;">
+                                    Future artifacts will only evaluate the focused branch. 
+                                    <span id="focused-branch-info"></span>
+                                </p>
+                            </div>
+                            <button onclick="unfocusBranches()" style="background: #9c27b0; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                                Unfocus (Evaluate All)
+                            </button>
+                        </div>
+                    </div>
                     <div class="form-group">
                         <label for="artifact-name">Artifact Name:</label>
                         <input type="text" id="artifact-name" placeholder="e.g., db.currentOp() output">
@@ -438,7 +667,34 @@
                     <h3>📜 Reasoning History</h3>
                     <button onclick="toggleHistory()" style="background: #9c27b0; margin-bottom: 15px;">Toggle History View</button>
                     <div id="history-content" style="display: none;">
-                        <div id="history-nodes"></div>
+                        <div class="tree-controls">
+                            <button onclick="fitTree()" style="background: #2196f3;">Fit to Screen</button>
+                            <button onclick="zoomIn()" style="background: #4caf50;">Zoom In</button>
+                            <button onclick="zoomOut()" style="background: #ff9800;">Zoom Out</button>
+                            <button onclick="resetZoom()" style="background: #9c27b0;">Reset Zoom</button>
+                            <div style="margin-left: auto; font-size: 12px; color: #666; display: flex; align-items: center;">
+                                <span>💡 Click "Backtrack" button on any node to backtrack to that step</span>
+                            </div>
+                        </div>
+                        <div id="tree-network"></div>
+                        <div class="tree-legend">
+                            <div class="legend-item">
+                                <div class="legend-color" style="background: #4caf50;"></div>
+                                <span>Active Branch</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color" style="background: #f44336;"></div>
+                                <span>Pruned Branch</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color" style="background: #2196f3;"></div>
+                                <span>Accepted Branch</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color" style="background: #9c27b0; border: 2px solid #4caf50;"></div>
+                                <span>Current Node</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -557,7 +813,10 @@
                 
                 if (response.ok) {
                     await updateCurrentState(data);
-                    showMessage(`Artifact processed successfully! Created ${data.nodes_created || 0} nodes across branches.`);
+                    const focusedMsg = data.is_focused 
+                        ? ` (Focused mode: evaluated ${data.nodes_created || 0} focused branch(es))`
+                        : '';
+                    showMessage(`Artifact processed successfully! Created ${data.nodes_created || 0} nodes across branches.${focusedMsg}`);
                     
                     // Clear artifact inputs
                     document.getElementById('artifact-name').value = '';
@@ -574,7 +833,17 @@
                         showMessage('Sufficient data gathered. You can get final analysis now.', 'success');
                     }
                 } else {
-                    showMessage(data.error || 'Failed to process artifact', 'error');
+                    const errorMsg = data.error || 'Failed to process artifact';
+                    showMessage(errorMsg, 'error');
+                    
+                    // If the error is about pruned focused branch, offer to unfocus
+                    if (errorMsg.includes('focused branch') && errorMsg.includes('pruned')) {
+                        setTimeout(() => {
+                            if (confirm('The focused branch has been pruned. Would you like to unfocus and evaluate all active branches?')) {
+                                unfocusBranches();
+                            }
+                        }, 500);
+                    }
                 }
             } catch (error) {
                 showMessage('Error: ' + error.message, 'error');
@@ -645,7 +914,7 @@
                 `;
             }
             
-            // Update hypotheses (display all hypotheses from root)
+            // Update hypotheses (display all hypotheses, but fade pruned ones)
             const hypothesesDiv = document.getElementById('hypotheses');
             hypothesesDiv.innerHTML = allHypotheses.map(h => {
                 const confidenceClass = h.confidence >= 0.7 ? 'confidence-high' : 
@@ -691,6 +960,57 @@
             // Load and display branches if available
             await loadBranches();
             updateBranchSelection();
+            
+            // Update focused mode indicator
+            updateFocusedModeIndicator(data);
+        }
+        
+        function updateFocusedModeIndicator(data) {
+            const indicator = document.getElementById('focused-mode-indicator');
+            const branchInfo = document.getElementById('focused-branch-info');
+            const isFocused = data.is_focused || (data.current_branch_ids && data.current_branch_ids.length > 0);
+            
+            if (isFocused && data.current_branch_ids && data.current_branch_ids.length > 0) {
+                indicator.style.display = 'block';
+                // Get branch description if available
+                if (window.branchesData) {
+                    const focusedBranch = window.branchesData.find(b => data.current_branch_ids.includes(b.hypothesis_id));
+                    if (focusedBranch) {
+                        branchInfo.textContent = `Focused on: "${focusedBranch.hypothesis_description}"`;
+                    } else {
+                        branchInfo.textContent = `Focused on ${data.current_branch_ids.length} branch(es)`;
+                    }
+                } else {
+                    branchInfo.textContent = `Focused on ${data.current_branch_ids.length} branch(es)`;
+                }
+            } else {
+                indicator.style.display = 'none';
+            }
+        }
+        
+        async function unfocusBranches() {
+            try {
+                const response = await fetch(`${API_BASE}/unfocus`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showMessage('Focus cleared. Future artifacts will evaluate all active branches.', 'success');
+                    // Reload current state to update UI
+                    const currentResponse = await fetch(`${API_BASE}/current-node`);
+                    if (currentResponse.ok) {
+                        const currentData = await currentResponse.json();
+                        await updateCurrentState(currentData);
+                    }
+                } else {
+                    showMessage(data.error || 'Failed to unfocus', 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            }
         }
         
         async function loadBranches() {
@@ -717,7 +1037,10 @@
                 const data = await response.json();
                 
                 if (response.ok) {
-                    showMessage(`Focused on branch: ${hypothesisId}`, 'success');
+                    const message = data.is_focused 
+                        ? `Branch focused. Future artifacts will only evaluate this branch.`
+                        : `Focused on branch: ${hypothesisId}`;
+                    showMessage(message, 'success');
                     // Reload current state
                     const currentResponse = await fetch(`${API_BASE}/current-node`);
                     if (currentResponse.ok) {
@@ -787,9 +1110,16 @@
                         await updateCurrentState(currentData);
                     }
                     
-                    // Reload history if visible
+                    // Reload branches for branch selection
+                    await loadBranches();
+                    
+                    // Reload history/tree view if visible
                     const historyContent = document.getElementById('history-content');
-                    if (historyContent.style.display !== 'none') {
+                    const treeNetwork = document.getElementById('tree-network');
+                    if (historyContent && historyContent.style.display !== 'none') {
+                        await loadHistory();
+                    } else if (treeNetwork && treeNetwork.style.display !== 'none') {
+                        // Tree view is visible, reload it
                         await loadHistory();
                     }
                 } else {
@@ -945,8 +1275,8 @@
                 const data = await response.json();
                 
                 if (response.ok) {
-                    // Use root_node_id or current_branch_ids if current_node_id not available
-                    const currentNodeId = data.current_node_id || data.root_node_id || null;
+                    // Use current_node_id from API, fallback to root_node_id if not set
+                    const currentNodeId = data.current_node_id || data.root_node_id || (data.nodes.length > 0 ? data.nodes[0].id : null);
                     displayHistory(data.nodes, currentNodeId);
                 } else {
                     showMessage(data.error || 'Failed to load history', 'error');
@@ -956,106 +1286,305 @@
             }
         }
         
+        // Global variables for tree visualization
+        let nodesMap = {}; // Map node.id -> node data
+        
         function displayHistory(nodes, currentNodeId) {
-            const historyDiv = document.getElementById('history-nodes');
+            const treeContainer = document.getElementById('tree-network');
+            
+            if (!treeContainer) {
+                console.error('Tree network container not found');
+                return;
+            }
             
             if (nodes.length === 0) {
-                historyDiv.innerHTML = '<p>No history available yet.</p>';
+                treeContainer.innerHTML = '<p style="padding: 20px; text-align: center;">No history available yet.</p>';
                 return;
             }
             
-            // Sort by step number
-            nodes.sort((a, b) => a.step_number - b.step_number);
-            
-            // Group nodes by branch
-            const nodesByBranch = {};
+            // Build nodes map for quick lookup
+            nodesMap = {};
             nodes.forEach(node => {
-                const branchId = node.hypothesis_id || 'root';
-                if (!nodesByBranch[branchId]) {
-                    nodesByBranch[branchId] = [];
-                }
-                nodesByBranch[branchId].push(node);
+                nodesMap[node.id] = node;
             });
             
-            historyDiv.innerHTML = Object.entries(nodesByBranch).map(([branchId, branchNodes]) => {
-                const firstNode = branchNodes[0];
-                const branchHypothesis = firstNode.hypothesis;
-                const branchStatus = firstNode.branch_status || 'active';
-                
-                return `
-                    <div style="margin-bottom: 20px; border: 2px solid ${branchStatus === 'active' ? '#4caf50' : '#f44336'}; border-radius: 8px; padding: 15px; background: ${branchStatus === 'active' ? '#f1f8f4' : '#ffebee'};">
-                        <div style="font-weight: 600; margin-bottom: 10px; color: #333;">
-                            Branch: ${branchHypothesis ? branchHypothesis.description : branchId}
-                            ${branchHypothesis ? `(${(branchHypothesis.confidence * 100).toFixed(0)}%)` : ''}
-                            <span style="margin-left: 10px; font-size: 12px; padding: 2px 8px; background: ${branchStatus === 'active' ? '#4caf50' : '#f44336'}; color: white; border-radius: 4px;">
-                                ${branchStatus}
-                            </span>
-                        </div>
-                        ${branchNodes.map(node => {
-                            const isCurrent = node.id === currentNodeId;
-                            const artifactsList = node.artifacts && node.artifacts.length > 0
-                                ? node.artifacts.map(a => a.name).join(', ')
-                                : 'None';
-                            
-                            return `
-                                <div class="history-node ${isCurrent ? 'current' : ''}" onclick="selectNode('${node.id}')" style="margin: 10px 0; margin-left: 20px;">
-                                    <div class="history-node-header">
-                                        <div>
-                                            <strong>Step ${node.step_number}: ${node.id}</strong>
-                                            ${isCurrent ? '<span style="color: #4caf50; margin-left: 10px;">● Current</span>' : ''}
-                                        </div>
-                                        <div style="font-size: 14px; color: #667eea;">
-                                            Confidence: ${(node.confidence || 0) * 100}%
-                                        </div>
-                                    </div>
-                                    <div class="node-info">
-                                        <div><strong>Artifacts:</strong> ${node.artifacts_count}</div>
-                                        <div><strong>Children:</strong> ${node.children_ids ? node.children_ids.length : 0}</div>
-                                    </div>
-                                    ${node.artifacts && node.artifacts.length > 0 ? `
-                                        <div style="margin-top: 10px; font-size: 12px; color: #666;">
-                                            <strong>Artifacts:</strong> ${artifactsList}
-                                        </div>
-                                    ` : ''}
-                                    ${!isCurrent ? `
-                                        <button class="backtrack-btn" onclick="event.stopPropagation(); backtrackToNode('${node.id}')">
-                                            Backtrack to This Step
-                                        </button>
-                                    ` : ''}
-                                </div>
-                            `;
-                        }).join('')}
-                    </div>
-                `;
-            }).join('');
-        }
-        
-        function selectNode(nodeId) {
-            // Just highlight, don't backtrack yet
-            console.log('Selected node:', nodeId);
-        }
-        
-        async function backtrackToNode(nodeId) {
-            if (!confirm(`Backtrack to step ${nodeId}? This will allow you to explore alternate branches from that point.`)) {
+            // Find root node (no parent_id)
+            const rootNode = nodes.find(n => !n.parent_id);
+            if (!rootNode) {
+                treeContainer.innerHTML = '<p style="padding: 20px; text-align: center;">No root node found.</p>';
                 return;
             }
             
+            // Calculate artifact sequence for each node
+            calculateArtifactSequences(nodes, rootNode.id);
+            
+            // Render custom CSS tree
+            renderCustomTree(rootNode.id, currentNodeId);
+        }
+        
+        function renderCustomTree(rootId, currentNodeId) {
+            const treeContainer = document.getElementById('tree-network');
+            treeContainer.innerHTML = '<div class="tree-container">' + buildTreeNodeHTML(rootId, currentNodeId, 0) + '</div>';
+            
+            // Auto-fit: scroll to show root node and center the tree
+            setTimeout(() => {
+                fitTree();
+            }, 100);
+        }
+        
+        function buildTreeNodeHTML(nodeId, currentNodeId, level) {
+            const node = nodesMap[nodeId];
+            if (!node) return '';
+            
+            const isCurrent = nodeId === currentNodeId;
+            
+            // Get hypothesis description
+            let hypothesisDesc = 'Root Node';
+            if (node.hypothesis) {
+                hypothesisDesc = node.hypothesis.description;
+            } else if (node.hypotheses_count > 0) {
+                hypothesisDesc = `${node.hypotheses_count} Initial Hypotheses`;
+            } else if (node.id === nodeId) {
+                hypothesisDesc = 'Initial Problem Analysis';
+            }
+            
+            // Truncate if too long
+            const maxDescLength = 70;
+            const truncatedDesc = hypothesisDesc.length > maxDescLength 
+                ? hypothesisDesc.substring(0, maxDescLength) + '...' 
+                : hypothesisDesc;
+            
+            // Determine artifact label
+            let artifactLabel = '';
+            if (node.artifact_sequence === 0) {
+                artifactLabel = 'Initial Step';
+            } else {
+                artifactLabel = `Post Artifact ${node.artifact_sequence}`;
+            }
+            
+            // Get artifact names
+            const artifactNames = node.artifacts && node.artifacts.length > 0
+                ? node.artifacts.map(a => a.name).join(', ')
+                : 'None';
+            
+            // Get confidence
+            const confidence = node.confidence || (node.hypothesis ? node.hypothesis.confidence : 0);
+            const confidencePercent = (confidence * 100).toFixed(0);
+            
+            // Determine status and CSS class
+            let status = 'active';
+            let statusClass = '';
+            if (node.hypothesis) {
+                status = node.hypothesis.status || node.branch_status || 'active';
+            } else {
+                status = node.branch_status || 'active';
+            }
+            
+            if (isCurrent) {
+                statusClass = 'current';
+            } else if (status === 'pruned') {
+                statusClass = 'pruned';
+            } else if (status === 'accepted') {
+                statusClass = 'accepted';
+            }
+            
+            // Build node HTML
+            let nodeHTML = '<div class="tree-node">';
+            nodeHTML += '<div class="tree-node-content ' + statusClass + '">';
+            
+            // Header
+            nodeHTML += `<div class="tree-node-header">${truncatedDesc}</div>`;
+            
+            // Badges
+            nodeHTML += '<div class="tree-node-badges">';
+            nodeHTML += `<span class="tree-badge badge-artifact">${artifactLabel}</span>`;
+            if (isCurrent) {
+                nodeHTML += '<span class="tree-badge badge-current">CURRENT</span>';
+            }
+            nodeHTML += '</div>';
+            
+            // Info
+            nodeHTML += '<div class="tree-node-info">';
+            nodeHTML += `<strong>Step ${node.step_number}</strong>`;
+            if (confidence > 0 && node.hypothesis) {
+                nodeHTML += ` | Confidence: <strong>${confidencePercent}%</strong>`;
+            }
+            nodeHTML += '</div>';
+            
+            // Meta info
+            nodeHTML += '<div class="tree-node-meta">';
+            if (artifactNames && artifactNames !== 'None') {
+                const maxArtifactLength = 50;
+                const truncatedArtifacts = artifactNames.length > maxArtifactLength
+                    ? artifactNames.substring(0, maxArtifactLength) + '...'
+                    : artifactNames;
+                nodeHTML += `<div><strong>Artifacts:</strong> ${truncatedArtifacts}</div>`;
+            }
+            if (node.hypothesis && node.hypothesis.category) {
+                nodeHTML += `<div><strong>Category:</strong> ${node.hypothesis.category}</div>`;
+            }
+            if (node.hypothesis && status !== 'active') {
+                nodeHTML += `<div><strong>Status:</strong> ${status.toUpperCase()}</div>`;
+            }
+            nodeHTML += '</div>';
+            
+            // Action buttons
+            if (!isCurrent) {
+                nodeHTML += `<div style="display: flex; gap: 8px; margin-top: 12px;">`;
+                nodeHTML += `<button class="tree-node-button" onclick="backtrackToNode('${node.id}')" style="flex: 1;">Backtrack to This Step</button>`;
+                nodeHTML += `<button class="tree-node-button" onclick="expandNode('${node.id}')" style="flex: 1; background: #4caf50;">Generate New Ideas</button>`;
+                nodeHTML += `</div>`;
+            } else {
+                // For current node, show expand option
+                nodeHTML += `<button class="tree-node-button" onclick="expandNode('${node.id}')" style="background: #4caf50;">Generate New Ideas</button>`;
+            }
+            
+            nodeHTML += '</div>'; // Close tree-node-content
+            
+            // Children
+            if (node.children_ids && node.children_ids.length > 0) {
+                nodeHTML += '<div class="tree-children">';
+                node.children_ids.forEach(childId => {
+                    nodeHTML += buildTreeNodeHTML(childId, currentNodeId, level + 1);
+                });
+                nodeHTML += '</div>'; // Close tree-children
+            }
+            
+            nodeHTML += '</div>'; // Close tree-node
+            
+            return nodeHTML;
+        }
+        
+        function calculateArtifactSequences(nodes, rootId) {
+            // Calculate artifact sequence by counting nodes with artifacts in path from root
+            function getPathToNode(nodeId) {
+                const path = [];
+                let currentId = nodeId;
+                while (currentId && nodesMap[currentId]) {
+                    path.unshift(currentId);
+                    currentId = nodesMap[currentId].parent_id;
+                }
+                return path;
+            }
+            
+            // Calculate sequence for each node
+            nodes.forEach(node => {
+                if (node.id === rootId) {
+                    node.artifact_sequence = 0; // Root is initial step
+                } else {
+                    // Get path from root to this node (excluding root)
+                    const path = getPathToNode(node.id);
+                    // Count how many nodes in the path (excluding root) have artifacts
+                    // This gives us the artifact sequence number
+                    const artifactCount = path.filter(nodeId => {
+                        const n = nodesMap[nodeId];
+                        return n && n.artifacts_count > 0;
+                    }).length;
+                    node.artifact_sequence = artifactCount;
+                }
+            });
+        }
+        
+        function fitTree() {
+            // Scroll to show the root node and center horizontally
+            const treeContainer = document.getElementById('tree-network');
+            if (treeContainer) {
+                // Scroll to top
+                treeContainer.scrollTo({ top: 0, behavior: 'smooth' });
+                
+                // Center horizontally if tree is wider than container
+                const container = treeContainer.querySelector('.tree-container');
+                if (container) {
+                    const containerWidth = container.scrollWidth;
+                    const viewportWidth = treeContainer.clientWidth;
+                    if (containerWidth > viewportWidth) {
+                        // Center the tree
+                        const scrollLeft = (containerWidth - viewportWidth) / 2;
+                        treeContainer.scrollTo({ left: scrollLeft, behavior: 'smooth' });
+                    } else {
+                        // Center by setting margin
+                        treeContainer.scrollTo({ left: 0, behavior: 'smooth' });
+                    }
+                }
+            }
+        }
+        
+        function zoomIn() {
+            // Not applicable for CSS tree, but keep for compatibility
+            console.log('Zoom not applicable for CSS tree');
+        }
+        
+        function zoomOut() {
+            // Not applicable for CSS tree, but keep for compatibility
+            console.log('Zoom not applicable for CSS tree');
+        }
+        
+        function resetZoom() {
+            // Scroll to top and reset
+            fitTree();
+        }
+        
+        // Make backtrackToNode available globally
+        window.backtrackToNode = async function(nodeId) {
             try {
+                // First, check if the node's branch is pruned by getting node info
+                // We'll check this by looking at the history data
+                let branchIsPruned = false;
+                let branchDescription = '';
+                
+                // Try to get node info from history
+                try {
+                    const historyResponse = await fetch(`${API_BASE}/history`);
+                    if (historyResponse.ok) {
+                        const historyData = await historyResponse.json();
+                        const node = historyData.nodes.find(n => n.id === nodeId);
+                        if (node && node.hypothesis) {
+                            branchIsPruned = node.hypothesis.status === 'pruned';
+                            branchDescription = node.hypothesis.description || '';
+                        } else if (node && node.branch_status === 'pruned') {
+                            branchIsPruned = true;
+                        }
+                    }
+                } catch (e) {
+                    // If we can't check, proceed anyway
+                    console.log('Could not check branch status:', e);
+                }
+                
+                // If branch is pruned, show confirmation dialog
+                if (branchIsPruned) {
+                    const confirmMsg = branchDescription 
+                        ? `This branch is pruned: "${branchDescription.substring(0, 60)}${branchDescription.length > 60 ? '...' : ''}"\n\nIt will be auto-restored and focused for evaluation. Continue?`
+                        : 'This branch is pruned. It will be auto-restored and focused for evaluation. Continue?';
+                    
+                    if (!confirm(confirmMsg)) {
+                        return; // User cancelled
+                    }
+                }
+                
                 const response = await fetch(`${API_BASE}/backtrack`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ node_id: nodeId })
+                    body: JSON.stringify({ node_id: nodeId, auto_restore: true })
                 });
                 
                 const data = await response.json();
                 
                 if (response.ok) {
-                    showMessage(`Backtracked to ${nodeId}`, 'success');
+                    let message = '';
+                    if (data.was_restored) {
+                        const hypDesc = data.restored_hypothesis?.description || 'branch';
+                        message = `Backtracked to ${nodeId}. Branch "${hypDesc.substring(0, 50)}${hypDesc.length > 50 ? '...' : ''}" was auto-restored and is now focused for evaluation.`;
+                    } else if (data.is_focused) {
+                        message = `Backtracked to ${nodeId}. Focused mode: Future artifacts will only evaluate this branch.`;
+                    } else {
+                        message = `Backtracked to ${nodeId}`;
+                    }
+                    showMessage(message, 'success');
                     // Reload current state
                     const currentResponse = await fetch(`${API_BASE}/current-node`);
                     if (currentResponse.ok) {
                         const currentData = await currentResponse.json();
-                        updateCurrentState(currentData);
+                        await updateCurrentState(currentData);
                     }
                     // Reload history to show new current node
                     await loadHistory();
@@ -1065,7 +1594,70 @@
             } catch (error) {
                 showMessage('Error: ' + error.message, 'error');
             }
+        };
+        
+        // Keep the original function for backward compatibility
+        async function backtrackToNode(nodeId) {
+            return window.backtrackToNode(nodeId);
         }
+        
+        // Expand node to generate new ideas
+        async function expandNode(nodeId) {
+            try {
+                if (!confirm('Generate new exploration directions and sub-hypotheses from this node? This will create new branches to explore.')) {
+                    return;
+                }
+                
+                showMessage('Generating new ideas from this node...', 'info');
+                
+                const response = await fetch(`${API_BASE}/expand-node`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ node_id: nodeId })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showMessage(`Generated ${data.nodes_created} new exploration directions!`, 'success');
+                    
+                    // Update current state with new hypotheses
+                    if (data.all_hypotheses) {
+                        // Use the hypotheses from the expand response
+                        const currentResponse = await fetch(`${API_BASE}/current-node`);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            // Merge new hypotheses into the response
+                            currentData.all_hypotheses = data.all_hypotheses;
+                            await updateCurrentState(currentData);
+                        } else {
+                            // Fallback: create a mock current state with new hypotheses
+                            await updateCurrentState({
+                                all_hypotheses: data.all_hypotheses,
+                                tree_summary: { total_nodes: 0, active_hypotheses: data.all_hypotheses.filter(h => h.status === 'active').length }
+                            });
+                        }
+                    } else {
+                        // Reload current state normally
+                        const currentResponse = await fetch(`${API_BASE}/current-node`);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            await updateCurrentState(currentData);
+                        }
+                    }
+                    
+                    // Reload history to show new nodes and fit to screen
+                    await loadHistory();
+                } else {
+                    showMessage(data.error || 'Failed to expand node', 'error');
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, 'error');
+            }
+        }
+        
+        // Make expandNode globally available
+        window.expandNode = expandNode;
         
         async function checkAutoBacktrack() {
             const btn = event.target;

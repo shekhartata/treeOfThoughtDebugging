@@ -72,6 +72,9 @@ class ReasoningNode:
     
     # Legacy field for backward compatibility (root node only)
     hypotheses: List[Hypothesis] = field(default_factory=list)
+    
+    # Child hypotheses created via node expansion (not in root)
+    child_hypotheses: List[Hypothesis] = field(default_factory=list)
 
 
 class TreeOfThoughtEngine:
@@ -112,6 +115,7 @@ class TreeOfThoughtEngine:
     def __init__(self, weights: Optional[Dict[str, float]] = None, llm_integration=None):
         self.nodes: List[ReasoningNode] = []
         self.root_node_id: Optional[str] = None  # Root node (contains all initial hypotheses)
+        self.current_node_id: Optional[str] = None  # Current active node (latest leaf node after artifact processing)
         self.current_branch_ids: List[str] = []  # Currently selected branches for focused evaluation
         self.weights = weights or self.DEFAULT_WEIGHTS.copy()
         self.problem_summary: str = ""
@@ -224,6 +228,7 @@ class TreeOfThoughtEngine:
         
         self.nodes.append(initial_node)
         self.root_node_id = initial_node.id
+        self.current_node_id = initial_node.id  # Set root as initial current node
         
         return initial_node
     
@@ -257,17 +262,16 @@ class TreeOfThoughtEngine:
     
     def get_active_branches(self) -> List[Tuple[str, ReasoningNode]]:
         """
-        Get all active branches using pre-order traversal.
+        Get all active branches using tree traversal.
         Returns list of (hypothesis_id, leaf_node) tuples for each active branch.
         """
         if not self.root_node_id:
             return []
         
-        root_node = self._get_node(self.root_node_id)
         active_branches = []
         
-        # Get all active hypotheses from root
-        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"]
+        # Get all active hypotheses by traversing the tree (includes child_hypotheses)
+        active_hypotheses = self.get_all_active_hypotheses_from_tree()
         
         for hyp in active_hypotheses:
             # Find the leaf node for this hypothesis branch
@@ -315,17 +319,17 @@ class TreeOfThoughtEngine:
     
     def get_all_branches_for_ui(self) -> List[Dict]:
         """
-        Get all branches (active and pruned) for UI display using pre-order traversal.
+        Get all branches (active and pruned) for UI display using tree traversal.
         Returns list of branch dictionaries with full path information.
+        Now includes ALL hypotheses from the tree (root + expanded child_hypotheses).
         """
         if not self.root_node_id:
             return []
         
-        root_node = self._get_node(self.root_node_id)
         branches = []
         
-        # Get all hypotheses from root (both active and pruned)
-        all_hypotheses = root_node.hypotheses
+        # Get ALL hypotheses from the tree (not just root) - includes expanded ones
+        all_hypotheses = self.get_all_hypotheses_from_tree()
         
         for hyp in all_hypotheses:
             branch_path = self.get_branch_path(hyp.id)
@@ -366,7 +370,8 @@ class TreeOfThoughtEngine:
             artifact_name: Name of the artifact
             artifact_content: Content of the artifact
             branch_ids: Optional list of specific hypothesis IDs to evaluate. 
-                       If None, evaluates all active branches.
+                       If None, uses current_branch_ids if set (from backtrack), 
+                       otherwise evaluates all active branches.
         
         Returns:
             List of newly created nodes (one per branch)
@@ -374,15 +379,43 @@ class TreeOfThoughtEngine:
         if not self.root_node_id:
             raise ValueError("Engine not initialized. Call initialize() first.")
         
-        # Get active branches to evaluate
+        # Get active branches to evaluate - use tree traversal to get ALL active hypotheses
+        # (including expanded ones from child_hypotheses, not just root node hypotheses)
         root_node = self._get_node(self.root_node_id)
-        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"]
+        active_hypotheses = self.get_all_active_hypotheses_from_tree()
+        
+        # If branch_ids not explicitly provided, check if we're in focused mode (from backtrack)
+        if branch_ids is None and self.current_branch_ids:
+            # Use focused branches from backtrack
+            branch_ids = self.current_branch_ids.copy()
+            # Filter to only include active hypotheses
+            branch_ids = [bid for bid in branch_ids if any(h.id == bid and h.status == "active" for h in active_hypotheses)]
+            if not branch_ids:
+                # All focused branches are pruned, clear focus and fall back to all active
+                self.current_branch_ids = []
+                branch_ids = None
+                # If there are no active hypotheses at all, we'll raise an error below
+                if not active_hypotheses:
+                    raise ValueError(
+                        "The focused branch has been pruned and there are no active branches remaining. "
+                        "Please unfocus or restore a branch to continue."
+                    )
         
         if branch_ids is not None:
             active_hypotheses = [h for h in active_hypotheses if h.id in branch_ids]
         
         if not active_hypotheses:
-            raise ValueError("No active branches to evaluate. All hypotheses may have been pruned.")
+            # Provide more helpful error message
+            if self.current_branch_ids:
+                raise ValueError(
+                    f"The focused branch(s) {self.current_branch_ids} have been pruned. "
+                    "Please unfocus to evaluate all active branches, or restore a branch to continue."
+                )
+            else:
+                raise ValueError(
+                    "No active branches to evaluate. All hypotheses have been pruned. "
+                    "Please restore a branch or initialize a new session."
+                )
         
         # Determine parent nodes for each branch
         # If this is the first artifact (no branch nodes exist yet), use root as parent
@@ -486,24 +519,54 @@ class TreeOfThoughtEngine:
             logger.error(f"Error details: {str(e)}")
             raise ValueError(f"LLM evaluation failed: {e}. Please check your API key and try again.")
         
+        # Update current_node_id to the latest created nodes (leaf nodes)
+        # If multiple branches, use the one with highest confidence, or first one
+        if new_nodes:
+            # Sort by confidence (highest first) and use the best one as current
+            sorted_nodes = sorted(new_nodes, key=lambda n: n.hypothesis.confidence if n.hypothesis else 0, reverse=True)
+            self.current_node_id = sorted_nodes[0].id
+        
         return new_nodes
     
     # _evaluate_artifacts() method removed - LLM evaluation is now required
     
-    def prune_hypotheses(self):
+    def prune_hypotheses(self, evaluated_branch_ids: Optional[List[str]] = None):
         """
         Prune low-confidence hypotheses (branches).
         
         Keeps at least the top 2 highest-scored hypotheses unless their confidence
         is less than 5% (0.05). Prunes entire branches, not just individual nodes.
+        Now checks ALL hypotheses from the tree (including child_hypotheses from expansion).
+        
+        Args:
+            evaluated_branch_ids: Optional list of hypothesis IDs that were just evaluated.
+                                If provided, only these branches will be considered for pruning.
+                                If None, all active hypotheses are considered (default behavior).
         """
-        root_node = self._get_node(self.root_node_id)
-        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"]
+        # Get ALL active hypotheses from the tree (not just root)
+        active_hypotheses = self.get_all_active_hypotheses_from_tree()
+        
+        # If specific branches were evaluated, only consider those for pruning
+        if evaluated_branch_ids is not None:
+            active_hypotheses = [h for h in active_hypotheses if h.id in evaluated_branch_ids]
         
         if not active_hypotheses:
             return
         
-        # Sort by confidence (highest first)
+        # Ensure all hypotheses are in master tracking (safety check)
+        for hyp in active_hypotheses:
+            if hyp.id not in self.all_hypotheses:
+                logger.warning(f"Active hypothesis {hyp.id} not in all_hypotheses, adding it")
+                self.all_hypotheses[hyp.id] = hyp
+        
+        # Sort by confidence (highest first) - use current confidence from master tracking
+        # Refresh confidence from master to ensure we have latest values
+        for hyp in active_hypotheses:
+            master_hyp = self.all_hypotheses.get(hyp.id)
+            if master_hyp:
+                # Use master's confidence (source of truth)
+                hyp.confidence = master_hyp.confidence
+        
         sorted_hypotheses = sorted(active_hypotheses, key=lambda x: x.confidence, reverse=True)
         
         # Keep at least the top 2 hypotheses
@@ -514,35 +577,69 @@ class TreeOfThoughtEngine:
         MIN_PROTECTED_CONFIDENCE = 0.05  # 5%
         
         for hypothesis in sorted_hypotheses:
+            # Get latest confidence from master tracking
+            master_hyp = self.all_hypotheses.get(hypothesis.id)
+            current_confidence = master_hyp.confidence if master_hyp else hypothesis.confidence
+            
             # If it's in the top 2, only prune if confidence < 5%
             if hypothesis in top_hypotheses:
-                if hypothesis.confidence < MIN_PROTECTED_CONFIDENCE:
+                if current_confidence < MIN_PROTECTED_CONFIDENCE:
+                    logger.info(f"Pruning top hypothesis {hypothesis.id} with confidence {current_confidence:.2%} (< 5%)")
                     self.prune_branch(hypothesis.id)
             # Otherwise, prune if below normal threshold
             else:
-                if hypothesis.confidence < self.PRUNE_THRESHOLD:
+                if current_confidence < self.PRUNE_THRESHOLD:
+                    logger.info(f"Pruning hypothesis {hypothesis.id} with confidence {current_confidence:.2%} (< {self.PRUNE_THRESHOLD:.0%})")
                     self.prune_branch(hypothesis.id)
     
     def prune_branch(self, hypothesis_id: str):
         """
         Prune an entire branch by marking all nodes in that branch as pruned.
         The branch is kept in memory but excluded from active traversal.
+        Also updates child_hypotheses in parent nodes.
         """
+        # Always update master hypothesis tracking first (source of truth)
         hypothesis = self.all_hypotheses.get(hypothesis_id)
-        if hypothesis:
+        if not hypothesis:
+            # Hypothesis not in master tracking - this shouldn't happen, but handle gracefully
+            logger.warning(f"Hypothesis {hypothesis_id} not found in all_hypotheses during pruning")
+            # Still try to update other references
+        else:
             hypothesis.status = "pruned"
         
         # Mark all nodes in this branch as pruned
         for node in self.nodes:
             if node.hypothesis_id == hypothesis_id:
                 node.branch_status = "pruned"
+                # Also update the hypothesis object in the node if it exists
+                if node.hypothesis and node.hypothesis.id == hypothesis_id:
+                    node.hypothesis.status = "pruned"
         
         # Also update root node's hypothesis list
         root_node = self._get_node(self.root_node_id)
         for hyp in root_node.hypotheses:
             if hyp.id == hypothesis_id:
                 hyp.status = "pruned"
+                # Ensure master tracking is also updated
+                if hypothesis:
+                    hyp.status = "pruned"
                 break
+        
+        # Update child_hypotheses in any parent nodes that have this hypothesis
+        for node in self.nodes:
+            if hasattr(node, 'child_hypotheses') and node.child_hypotheses:
+                for hyp in node.child_hypotheses:
+                    if hyp.id == hypothesis_id:
+                        hyp.status = "pruned"
+                        # Ensure master tracking is also updated
+                        master_hyp = self.all_hypotheses.get(hyp.id)
+                        if master_hyp:
+                            master_hyp.status = "pruned"
+                        elif not hypothesis:
+                            # If master wasn't found earlier, try to add it now
+                            self.all_hypotheses[hyp.id] = hyp
+                            hyp.status = "pruned"
+                        break
     
     def unprune_branch(self, hypothesis_id: str):
         """Unprune a branch, making it active again."""
@@ -561,31 +658,180 @@ class TreeOfThoughtEngine:
             if hyp.id == hypothesis_id:
                 hyp.status = "active"
                 break
+        
+        # Update child_hypotheses in any parent nodes that have this hypothesis
+        for node in self.nodes:
+            if hasattr(node, 'child_hypotheses') and node.child_hypotheses:
+                for hyp in node.child_hypotheses:
+                    if hyp.id == hypothesis_id:
+                        hyp.status = "active"
+                        # Also update in master tracking
+                        master_hyp = self.all_hypotheses.get(hyp.id)
+                        if master_hyp:
+                            master_hyp.status = "active"
+                        break
     
-    def backtrack(self, node_id: Optional[str] = None, hypothesis_id: Optional[str] = None) -> ReasoningNode:
+    def backtrack(self, node_id: Optional[str] = None, hypothesis_id: Optional[str] = None, auto_restore: bool = True) -> Tuple[ReasoningNode, bool]:
         """
         Backtrack to a previous node or set focus on a specific branch.
+        When backtracking, future artifact evaluations will focus on the backtracked branch.
+        If the branch is pruned, it will be auto-restored (if auto_restore=True).
+        Use unfocus() to return to evaluating all active branches.
         
         Args:
-            node_id: Specific node to backtrack to
+            node_id: Specific node to backtrack to (will focus on that node's branch)
             hypothesis_id: Focus on a specific hypothesis branch (sets current_branch_ids)
+            auto_restore: If True, automatically restore pruned branches when backtracking
         
         Returns:
-            The node that was backtracked to, or the leaf node of the specified branch
+            Tuple of (the node that was backtracked to, whether branch was restored)
         """
+        restored = False
         if node_id:
             node = self._get_node(node_id)
-            # Set current branch focus to this node's branch
+            # Set current node to the backtracked node
+            self.current_node_id = node_id
+            # Set current branch focus to this node's branch (if it has one)
             if node.hypothesis_id:
-                self.current_branch_ids = [node.hypothesis_id]
-            return node
+                # Check if the hypothesis is still active
+                root_node = self._get_node(self.root_node_id)
+                hyp = next((h for h in root_node.hypotheses if h.id == node.hypothesis_id), None)
+                if hyp:
+                    if hyp.status != "active":
+                        # Hypothesis is pruned - auto-restore if requested
+                        if auto_restore:
+                            self.unprune_branch(node.hypothesis_id)
+                            restored = True
+                        else:
+                            # Don't restore, just clear focus
+                            self.current_branch_ids = []
+                            return (node, False)
+                    # Set focus on this branch (now active)
+                    self.current_branch_ids = [node.hypothesis_id]
+                else:
+                    # Hypothesis not found in root - clear focus
+                    self.current_branch_ids = []
+            else:
+                # Root node or node without hypothesis - evaluate all branches
+                self.current_branch_ids = []
+            return (node, restored)
         elif hypothesis_id:
             # Focus on specific branch
+            # Check if hypothesis is still active
+            root_node = self._get_node(self.root_node_id)
+            hyp = next((h for h in root_node.hypotheses if h.id == hypothesis_id), None)
+            if not hyp:
+                raise ValueError(f"Hypothesis {hypothesis_id} does not exist")
+            
+            if hyp.status != "active":
+                # Hypothesis is pruned - auto-restore if requested
+                if auto_restore:
+                    self.unprune_branch(hypothesis_id)
+                    restored = True
+                else:
+                    raise ValueError(f"Hypothesis {hypothesis_id} is pruned. Set auto_restore=True to restore it.")
+            
             self.current_branch_ids = [hypothesis_id]
             leaf = self._get_branch_leaf(hypothesis_id)
-            return leaf if leaf else self._get_node(self.root_node_id)
+            target_node = leaf if leaf else self._get_node(self.root_node_id)
+            # Set current node to the target node
+            self.current_node_id = target_node.id
+            return (target_node, restored)
         else:
             raise ValueError("Either node_id or hypothesis_id must be provided")
+    
+    def unfocus(self):
+        """
+        Clear branch focus and return to evaluating all active branches.
+        This undoes the focus set by backtrack().
+        """
+        self.current_branch_ids = []
+    
+    def expand_node(self, node_id: str) -> List[ReasoningNode]:
+        """
+        Expand a node by generating new sub-hypotheses or exploration directions from it.
+        Creates new child nodes with new hypotheses to explore.
+        
+        Args:
+            node_id: The node to expand from
+        
+        Returns:
+            List of newly created child nodes
+        """
+        if not self.root_node_id:
+            raise ValueError("Engine not initialized. Call initialize() first.")
+        
+        if not self.llm_integration or not self.llm_integration.use_llm:
+            raise ValueError("LLM is required for node expansion. Please ensure OPENAI_API_KEY is set.")
+        
+        # Get the node to expand
+        parent_node = self._get_node(node_id)
+        
+        # Generate new sub-hypotheses from this node
+        try:
+            expansion_result = self.llm_integration.generate_sub_hypotheses_from_node(parent_node, self)
+            new_hypotheses_data = expansion_result.get('hypotheses', [])
+            new_requests = expansion_result.get('next_requests', [])
+        except Exception as e:
+            logger.error(f"Failed to generate sub-hypotheses: {e}", exc_info=True)
+            raise ValueError(f"Failed to generate new ideas from node: {e}")
+        
+        if not new_hypotheses_data:
+            raise ValueError("No new exploration directions were generated. The LLM may need more context.")
+        
+        # Create new hypotheses
+        new_hypotheses = []
+        for hyp_data in new_hypotheses_data:
+            hyp = Hypothesis(
+                id=f"hyp_{len(self.all_hypotheses) + 1}",
+                description=hyp_data['description'],
+                category=hyp_data['category'],
+                prior_score=hyp_data['confidence'],
+                confidence=hyp_data['confidence']
+            )
+            if 'rationale' in hyp_data and hyp_data['rationale']:
+                hyp.evidence.append(f"Exploration rationale: {hyp_data['rationale']}")
+            new_hypotheses.append(hyp)
+            self.all_hypotheses[hyp.id] = hyp
+        
+        # Add new hypotheses to the parent node's child_hypotheses (not root)
+        # Find the parent node in the nodes list and update it
+        for n in self.nodes:
+            if n.id == parent_node.id:
+                n.child_hypotheses.extend(new_hypotheses)
+                break
+        
+        # Create new child nodes (one per new hypothesis)
+        self.step_counter += 1
+        new_nodes = []
+        
+        for hypothesis in new_hypotheses:
+            new_node = ReasoningNode(
+                id=f"node_{len(self.nodes) + 1}",
+                step_number=self.step_counter,
+                hypothesis_id=hypothesis.id,
+                hypothesis=hypothesis,
+                parent_id=parent_node.id,
+                requested_data=new_requests.copy() if new_requests else [],
+                evaluation_summary=f"New exploration direction generated from step {parent_node.step_number}"
+            )
+            
+            # Add to parent's children
+            for n in self.nodes:
+                if n.id == parent_node.id:
+                    n.children_ids.append(new_node.id)
+                    break
+            
+            self.nodes.append(new_node)
+            new_nodes.append(new_node)
+        
+        # Update current_node_id to the first new node (or keep it at parent if preferred)
+        if new_nodes:
+            # Optionally set current to first new node, or keep at parent
+            # For now, keep at parent so user can see the expansion
+            pass
+        
+        return new_nodes
     
     def should_auto_backtrack(self) -> Optional[Dict]:
         """
@@ -688,17 +934,104 @@ class TreeOfThoughtEngine:
         raise ValueError(f"Node {node_id} not found")
     
     def get_current_node(self) -> Optional[ReasoningNode]:
-        """Get the current active node (root node for branch-based structure)."""
+        """Get the current active node (latest leaf node after artifact processing, or root if not set)."""
         if not self.root_node_id:
             return None
+        # If current_node_id is set, return that node; otherwise return root
+        if self.current_node_id:
+            try:
+                return self._get_node(self.current_node_id)
+            except ValueError:
+                # If current_node_id is invalid, fall back to root
+                return self._get_node(self.root_node_id)
         return self._get_node(self.root_node_id)
+    
+    def get_all_active_hypotheses_from_tree(self) -> List[Hypothesis]:
+        """
+        Traverse the entire tree and collect all active hypotheses from all nodes.
+        This includes hypotheses from root node and all child nodes created via expansion.
+        Uses master hypothesis status from self.all_hypotheses to ensure pruning is respected.
+        
+        Returns:
+            List of all active hypotheses found in the tree
+        """
+        active_hypotheses = []
+        seen_hypothesis_ids = set()
+        
+        # Traverse all nodes in the tree
+        for node in self.nodes:
+            # Check if node has a hypothesis
+            if node.hypothesis and node.hypothesis.id not in seen_hypothesis_ids:
+                # Check master hypothesis status (pruning updates this)
+                master_hyp = self.all_hypotheses.get(node.hypothesis.id)
+                if master_hyp and master_hyp.status == "active" and node.branch_status == "active":
+                    active_hypotheses.append(master_hyp)
+                    seen_hypothesis_ids.add(node.hypothesis.id)
+            
+            # Check if node has child_hypotheses (from expansion)
+            if hasattr(node, 'child_hypotheses') and node.child_hypotheses:
+                for hyp in node.child_hypotheses:
+                    if hyp.id not in seen_hypothesis_ids:
+                        # Check master hypothesis status
+                        master_hyp = self.all_hypotheses.get(hyp.id)
+                        if master_hyp and master_hyp.status == "active":
+                            active_hypotheses.append(master_hyp)
+                            seen_hypothesis_ids.add(hyp.id)
+        
+        # Also check root node's hypotheses (initial hypotheses)
+        if self.root_node_id:
+            root_node = self._get_node(self.root_node_id)
+            for hyp in root_node.hypotheses:
+                if hyp.id not in seen_hypothesis_ids:
+                    # Check master hypothesis status
+                    master_hyp = self.all_hypotheses.get(hyp.id)
+                    if master_hyp and master_hyp.status == "active":
+                        active_hypotheses.append(master_hyp)
+                        seen_hypothesis_ids.add(hyp.id)
+        
+        return active_hypotheses
+    
+    def get_all_hypotheses_from_tree(self) -> List[Hypothesis]:
+        """
+        Traverse the entire tree and collect ALL hypotheses (active, pruned, accepted) from all nodes.
+        
+        Returns:
+            List of all hypotheses found in the tree
+        """
+        all_hypotheses = []
+        seen_hypothesis_ids = set()
+        
+        # Traverse all nodes in the tree
+        for node in self.nodes:
+            # Check if node has a hypothesis
+            if node.hypothesis and node.hypothesis.id not in seen_hypothesis_ids:
+                all_hypotheses.append(node.hypothesis)
+                seen_hypothesis_ids.add(node.hypothesis.id)
+            
+            # Check if node has child_hypotheses (from expansion)
+            if hasattr(node, 'child_hypotheses') and node.child_hypotheses:
+                for hyp in node.child_hypotheses:
+                    if hyp.id not in seen_hypothesis_ids:
+                        all_hypotheses.append(hyp)
+                        seen_hypothesis_ids.add(hyp.id)
+        
+        # Also check root node's hypotheses (initial hypotheses)
+        if self.root_node_id:
+            root_node = self._get_node(self.root_node_id)
+            for hyp in root_node.hypotheses:
+                if hyp.id not in seen_hypothesis_ids:
+                    all_hypotheses.append(hyp)
+                    seen_hypothesis_ids.add(hyp.id)
+        
+        return all_hypotheses
     
     def get_tree_summary(self) -> Dict:
         """Get a summary of the reasoning tree."""
-        root_node = self._get_node(self.root_node_id) if self.root_node_id else None
-        active_hypotheses = [h for h in root_node.hypotheses if h.status == "active"] if root_node else []
-        pruned_hypotheses = [h for h in root_node.hypotheses if h.status == "pruned"] if root_node else []
-        accepted_hypotheses = [h for h in root_node.hypotheses if h.status == "accepted"] if root_node else []
+        # Use tree traversal to get all hypotheses (not just root)
+        all_hypotheses = self.get_all_hypotheses_from_tree()
+        active_hypotheses = [h for h in all_hypotheses if h.status == "active"]
+        pruned_hypotheses = [h for h in all_hypotheses if h.status == "pruned"]
+        accepted_hypotheses = [h for h in all_hypotheses if h.status == "accepted"]
         
         return {
             'total_nodes': len(self.nodes),

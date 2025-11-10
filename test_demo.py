@@ -151,6 +151,72 @@ def demo():
     print(f"   Accepted hypotheses: {summary['accepted_hypotheses']}")
     print(f"   Pruned hypotheses: {summary['pruned_hypotheses']}")
     
+    # Test backtrack functionality
+    print("\n9. Testing Backtrack Functionality:")
+    try:
+        # Get current node before backtrack
+        current_before = engine.get_current_node()
+        if current_before:
+            print(f"   Current node before backtrack: {current_before.id} (Step {current_before.step_number})")
+            
+            # Get root node to backtrack to
+            root_node = engine._get_node(engine.root_node_id) if engine.root_node_id else None
+            if root_node and root_node.id != current_before.id:
+                print(f"   Backtracking to root node: {root_node.id} (Step {root_node.step_number})")
+                engine.backtrack(node_id=root_node.id)
+                
+                # Get current node after backtrack
+                current_after = engine.get_current_node()
+                if current_after:
+                    print(f"   Current node after backtrack: {current_after.id} (Step {current_after.step_number})")
+                    if current_after.id == root_node.id:
+                        print("   ✓ Backtrack successful!")
+                    else:
+                        print("   ✗ Backtrack failed - current node doesn't match target")
+                else:
+                    print("   ✗ Error: Could not get current node after backtrack")
+            else:
+                print("   (Skipping backtrack test - already at root or root not found)")
+        else:
+            print("   ✗ Error: Could not get current node")
+    except Exception as e:
+        print(f"   ✗ Error during backtrack test: {e}")
+    
+    # Test history/tree structure
+    print("\n10. Tree Structure (for UI visualization):")
+    try:
+        # Get all nodes from engine
+        all_nodes = engine.nodes if hasattr(engine, 'nodes') else []
+        print(f"   Total nodes in tree: {len(all_nodes)}")
+        
+        # Show tree structure
+        root = engine._get_node(engine.root_node_id) if engine.root_node_id else None
+        if root:
+            def print_tree(node_id, level=0):
+                try:
+                    node = engine._get_node(node_id)
+                    if not node:
+                        return
+                    indent = "  " * level
+                    node_type = "Root" if level == 0 else f"Node"
+                    step_info = f"Step {node.step_number}"
+                    if node.hypothesis:
+                        hyp_info = f"Hyp: {node.hypothesis.description[:40]}..."
+                    else:
+                        hyp_count = len(node.hypotheses) if hasattr(node, 'hypotheses') and node.hypotheses else 0
+                        hyp_info = f"Hypotheses: {hyp_count}"
+                    print(f"   {indent}{node_type} {node_id[:8]}... ({step_info}) - {hyp_info}")
+                    if hasattr(node, 'children_ids') and node.children_ids:
+                        for child_id in node.children_ids:
+                            print_tree(child_id, level + 1)
+                except Exception as e:
+                    print(f"   {'  ' * level}Error getting node {node_id[:8]}...: {e}")
+            
+            print("   Tree structure:")
+            print_tree(root.id)
+    except Exception as e:
+        print(f"   ✗ Error getting tree structure: {e}")
+    
     print("\n" + "=" * 60)
     print("Demo complete!")
     print("=" * 60)

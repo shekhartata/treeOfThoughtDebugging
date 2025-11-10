@@ -865,4 +865,170 @@ Format your response clearly with these sections. Be specific and actionable."""
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Error details: {str(e)}")
             raise ValueError(f"LLM final analysis failed: {e}. Please check your API key and try again.")
+    
+    def generate_sub_hypotheses_from_node(self, node: ReasoningNode, engine: TreeOfThoughtEngine) -> List[Dict]:
+        """
+        Generate new sub-hypotheses or exploration directions from a specific node.
+        This allows expanding the tree from any point by generating new ideas to explore.
+        
+        Args:
+            node: The node to expand from
+            engine: The engine instance to get context (problem summary, path, etc.)
+        
+        Returns:
+            List of dictionaries with new hypotheses and next requests
+        """
+        if not self.use_llm:
+            raise ValueError("LLM is required for node expansion but not available.")
+        
+        try:
+            from openai import OpenAI
+            import re
+            client = OpenAI(api_key=self.api_key)
+            
+            # Build context about the current node
+            node_hypothesis = ""
+            if node.hypothesis:
+                node_hypothesis = f"""
+Current Hypothesis at This Node:
+- Description: {node.hypothesis.description}
+- Category: {node.hypothesis.category}
+- Current Confidence: {node.hypothesis.confidence:.2f}
+- Evidence Collected: {', '.join(node.hypothesis.evidence[-3:]) if node.hypothesis.evidence else 'None'}
+"""
+            
+            # Get path from root to this node
+            path_to_node = []
+            current = node
+            while current:
+                path_to_node.insert(0, {
+                    'step': current.step_number,
+                    'hypothesis': current.hypothesis.description if current.hypothesis else 'Root',
+                    'artifacts': [a['name'] for a in current.artifacts_received]
+                })
+                if current.parent_id:
+                    try:
+                        current = engine._get_node(current.parent_id)
+                    except:
+                        break
+                else:
+                    break
+            
+            path_text = "\n".join([
+                f"  Step {p['step']}: {p['hypothesis']} (Artifacts: {', '.join(p['artifacts']) if p['artifacts'] else 'None'})"
+                for p in path_to_node
+            ])
+            
+            # Collect all artifacts from the path
+            all_artifacts = []
+            for n in engine.nodes:
+                if n.step_number <= node.step_number:  # Only artifacts up to this node
+                    for art in n.artifacts_received:
+                        all_artifacts.append(f"- {art['name']}: {art['content'][:200]}...")
+            
+            artifacts_text = "\n".join(all_artifacts[-5:]) if all_artifacts else "No artifacts collected yet"
+            
+            prompt = f"""You are an expert MongoDB consultant exploring a debugging scenario from a specific point in the reasoning tree.
+
+ORIGINAL PROBLEM:
+{engine.problem_summary}
+
+CURRENT POSITION IN REASONING TREE:
+{path_text}
+
+{node_hypothesis}
+
+ARTIFACTS COLLECTED SO FAR:
+{artifacts_text}
+
+Based on this context, generate 2-5 NEW exploration directions or sub-hypotheses to investigate from this point. These should be:
+1. More specific variations or deeper investigations of the current hypothesis
+2. Alternative explanations that haven't been fully explored
+3. Related issues that might be connected
+4. New angles to investigate based on what we've learned
+
+For each new direction, provide:
+1. A clear description of what to explore
+2. The category (must be one of: indexing, query_shape, schema, wt_cache, storage, replication, networking)
+3. An initial confidence score (0.0-1.0) based on current evidence
+4. Why this direction is worth exploring from this point
+
+Format your response as:
+NEW_DIRECTIONS:
+1. [Description] | Category: [category] | Confidence: [0.0-1.0] | Rationale: [why explore this]
+2. [Description] | Category: [category] | Confidence: [0.0-1.0] | Rationale: [why explore this]
+...
+
+NEXT_REQUESTS:
+- [Specific MongoDB command/output needed for these new directions]
+- [Another specific request]
+..."""
+            
+            response = client.chat.completions.create(
+                model="gpt-5",
+                messages=[
+                    {"role": "system", "content": "You are an expert MongoDB consultant. Generate focused, actionable exploration directions from specific points in a reasoning tree."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_completion_tokens=8000
+            )
+            
+            llm_output = response.choices[0].message.content
+            
+            # Check if content is empty
+            if not llm_output or llm_output.strip() == '':
+                if hasattr(response.choices[0].message, 'reasoning') and response.choices[0].message.reasoning:
+                    llm_output = response.choices[0].message.reasoning
+                else:
+                    raise ValueError("GPT-5 returned empty content for node expansion.")
+            
+            # Parse new directions/hypotheses
+            new_hypotheses = []
+            next_requests = []
+            in_directions = False
+            in_requests = False
+            
+            lines = llm_output.split('\n')
+            for line in lines:
+                line = line.strip()
+                if 'NEW_DIRECTIONS:' in line.upper() or 'DIRECTIONS:' in line.upper():
+                    in_directions = True
+                    in_requests = False
+                    continue
+                if 'NEXT_REQUESTS:' in line.upper() or 'NEXT REQUEST:' in line.upper():
+                    in_directions = False
+                    in_requests = True
+                    continue
+                
+                if in_directions and line and (line[0].isdigit() or line.startswith('-')):
+                    # Parse: "1. Description | Category: cat | Confidence: 0.5 | Rationale: ..."
+                    match = re.search(r'(.+?)\s*\|\s*Category:\s*(\w+)\s*\|\s*Confidence:\s*([\d.]+)', line, re.IGNORECASE)
+                    if match:
+                        desc = match.group(1).strip().lstrip('0123456789.-) ').strip()
+                        category = match.group(2).strip().lower()
+                        confidence = float(match.group(3))
+                        # Extract rationale if present
+                        rationale_match = re.search(r'Rationale:\s*(.+)', line, re.IGNORECASE)
+                        rationale = rationale_match.group(1).strip() if rationale_match else ""
+                        
+                        new_hypotheses.append({
+                            'description': desc,
+                            'category': category,
+                            'confidence': min(1.0, max(0.0, confidence)),
+                            'rationale': rationale
+                        })
+                
+                if in_requests and line and (line.startswith('-') or line[0].isdigit()):
+                    req = line.lstrip('- ').lstrip('0123456789. ').strip()
+                    if req:
+                        next_requests.append(req)
+            
+            return {
+                'hypotheses': new_hypotheses,
+                'next_requests': next_requests
+            }
+            
+        except Exception as e:
+            logger.error(f"LLM node expansion failed: {e}", exc_info=True)
+            raise ValueError(f"LLM node expansion failed: {e}. Please check your API key and try again.")
 

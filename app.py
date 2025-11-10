@@ -102,8 +102,22 @@ def upload_artifact():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
+    # Determine which branches were evaluated for pruning
+    # If specific branches were evaluated (either via branch_ids or focused mode), only prune those.
+    # Otherwise, prune all active branches.
+    evaluated_branch_ids = None
+    if branch_ids is not None:
+        # User selected specific branches - extract the hypothesis IDs from the nodes that were actually created
+        evaluated_branch_ids = [node.hypothesis_id for node in new_nodes if node.hypothesis_id]
+    elif engine.current_branch_ids:
+        # Focused mode (from backtrack) - only prune the focused branches
+        evaluated_branch_ids = [node.hypothesis_id for node in new_nodes if node.hypothesis_id]
+    # If branch_ids was None and current_branch_ids is empty, evaluated_branch_ids stays None, 
+    # meaning prune all active branches
+    
     # Prune low-confidence hypotheses (branches)
-    engine.prune_hypotheses()
+    # Only prune branches that were just evaluated (if specific branches were selected)
+    engine.prune_hypotheses(evaluated_branch_ids=evaluated_branch_ids)
     
     # Get next requests (LLM is required)
     try:
@@ -115,7 +129,8 @@ def upload_artifact():
     is_complete = engine.is_complete()
     
     # Build response with all branches
-    root_node = engine.get_current_node()
+    # Get ALL hypotheses by traversing the tree (not just root)
+    all_hypotheses = engine.get_all_hypotheses_from_tree()
     
     return jsonify({
         'success': True,
@@ -152,12 +167,14 @@ def upload_artifact():
                 'status': h.status,
                 'evidence': h.evidence
             }
-            for h in root_node.hypotheses
-        ] if root_node else [],
+            for h in all_hypotheses
+        ],
         'requested_data': next_requests,
         'tree_summary': engine.get_tree_summary(),
         'is_complete': is_complete,
-        'next_requests': next_requests
+        'next_requests': next_requests,
+        'current_branch_ids': engine.current_branch_ids,
+        'is_focused': len(engine.current_branch_ids) > 0
     })
 
 @app.route('/api/current-node', methods=['GET'])
@@ -171,6 +188,9 @@ def get_current_node():
     node = engine.get_current_node()
     if not node:
         return jsonify({'error': 'No current node'}), 404
+    
+    # Get ALL hypotheses by traversing the tree (not just root)
+    all_hypotheses = engine.get_all_hypotheses_from_tree()
     
     return jsonify({
         'node': {
@@ -196,7 +216,20 @@ def get_current_node():
                 for art in node.artifacts_received
             ]
         },
-        'tree_summary': engine.get_tree_summary()
+        'all_hypotheses': [
+            {
+                'id': h.id,
+                'description': h.description,
+                'category': h.category,
+                'confidence': h.confidence,
+                'status': h.status,
+                'evidence': h.evidence
+            }
+            for h in all_hypotheses
+        ],
+        'tree_summary': engine.get_tree_summary(),
+        'current_branch_ids': engine.current_branch_ids,
+        'is_focused': len(engine.current_branch_ids) > 0
     })
 
 @app.route('/api/backtrack', methods=['POST'])
@@ -215,7 +248,8 @@ def backtrack():
         return jsonify({'error': 'Either node_id or hypothesis_id is required'}), 400
     
     try:
-        node = engine.backtrack(node_id=node_id, hypothesis_id=hypothesis_id)
+        auto_restore = data.get('auto_restore', True)  # Default to True
+        node, was_restored = engine.backtrack(node_id=node_id, hypothesis_id=hypothesis_id, auto_restore=auto_restore)
         
         # Get branch information if hypothesis_id was provided
         branch_info = None
@@ -226,6 +260,19 @@ def backtrack():
                 'path_length': len(branch_path),
                 'leaf_node_id': branch_path[-1].id if branch_path else None
             }
+        
+        # Get updated hypothesis status after potential restoration
+        root_node = engine._get_node(engine.root_node_id) if engine.root_node_id else None
+        restored_hypothesis = None
+        if was_restored and node.hypothesis_id and root_node:
+            hyp = next((h for h in root_node.hypotheses if h.id == node.hypothesis_id), None)
+            if hyp:
+                restored_hypothesis = {
+                    'id': hyp.id,
+                    'description': hyp.description,
+                    'status': hyp.status,
+                    'confidence': hyp.confidence
+                }
         
         return jsonify({
             'success': True,
@@ -252,7 +299,10 @@ def backtrack():
                 ] if hasattr(node, 'hypotheses') and node.hypotheses else []
             },
             'branch_info': branch_info,
-            'current_branch_ids': engine.current_branch_ids
+            'current_branch_ids': engine.current_branch_ids,
+            'is_focused': len(engine.current_branch_ids) > 0,
+            'was_restored': was_restored,
+            'restored_hypothesis': restored_hypothesis
         })
     except ValueError as e:
         return jsonify({'error': str(e)}), 404
@@ -321,6 +371,7 @@ def get_history():
             for node in engine.nodes
         ],
         'root_node_id': engine.root_node_id,
+        'current_node_id': engine.current_node_id,  # Return current node ID
         'current_branch_ids': engine.current_branch_ids
     })
 
@@ -347,12 +398,23 @@ def auto_backtrack():
         if execute:
             # Actually perform the backtrack
             # Check if recommendation has hypothesis_id (branch-based) or node_id (legacy)
-            if 'recommended_hypothesis_id' in recommendation:
-                node = engine.backtrack(hypothesis_id=recommendation['recommended_hypothesis_id'])
-            elif 'recommended_node_id' in recommendation:
-                node = engine.backtrack(node_id=recommendation['recommended_node_id'])
+            recommended_hyp_id = recommendation.get('recommended_hypothesis_id')
+            recommended_node_id = recommendation.get('recommended_node_id')
+            
+            if recommended_hyp_id is not None:
+                # Valid hypothesis ID provided
+                node = engine.backtrack(hypothesis_id=recommended_hyp_id)
+            elif recommended_node_id is not None:
+                # Valid node ID provided
+                node = engine.backtrack(node_id=recommended_node_id)
             else:
-                return jsonify({'error': 'Invalid recommendation format'}), 400
+                # No valid backtrack target (e.g., all hypotheses pruned)
+                return jsonify({
+                    'error': recommendation.get('message', 'Cannot backtrack: No valid target available. All hypotheses may be pruned.'),
+                    'reason': recommendation.get('reason', 'dead_end'),
+                    'should_backtrack': True,
+                    'executed': False
+                }), 400
                 
             return jsonify({
                 'should_backtrack': True,
@@ -375,6 +437,82 @@ def auto_backtrack():
                 'message': recommendation['message'],
                 'recommendation': recommendation
             })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/unfocus', methods=['POST'])
+def unfocus():
+    """Clear branch focus and return to evaluating all active branches."""
+    global engine
+    
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    
+    try:
+        engine.unfocus()
+        return jsonify({
+            'success': True,
+            'message': 'Focus cleared. Future artifacts will evaluate all active branches.',
+            'current_branch_ids': [],
+            'is_focused': False
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/expand-node', methods=['POST'])
+def expand_node():
+    """Expand a node by generating new sub-hypotheses or exploration directions."""
+    global engine
+    
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    
+    data = request.json
+    node_id = data.get('node_id')
+    
+    if not node_id:
+        return jsonify({'error': 'node_id is required'}), 400
+    
+    try:
+        new_nodes = engine.expand_node(node_id)
+        
+        # Get ALL hypotheses by traversing the tree (includes new ones from parent node)
+        all_hypotheses = engine.get_all_hypotheses_from_tree()
+        
+        return jsonify({
+            'success': True,
+            'nodes_created': len(new_nodes),
+            'new_nodes': [
+                {
+                    'id': node.id,
+                    'step_number': node.step_number,
+                    'hypothesis_id': node.hypothesis_id,
+                    'hypothesis': {
+                        'id': node.hypothesis.id if node.hypothesis else None,
+                        'description': node.hypothesis.description if node.hypothesis else None,
+                        'category': node.hypothesis.category if node.hypothesis else None,
+                        'confidence': node.hypothesis.confidence if node.hypothesis else 0.0,
+                        'status': node.hypothesis.status if node.hypothesis else 'unknown'
+                    } if node.hypothesis else None,
+                    'parent_id': node.parent_id
+                }
+                for node in new_nodes
+            ],
+            'all_hypotheses': [
+                {
+                    'id': h.id,
+                    'description': h.description,
+                    'category': h.category,
+                    'confidence': h.confidence,
+                    'status': h.status,
+                    'evidence': h.evidence
+                }
+                for h in all_hypotheses
+            ],
+            'message': f'Generated {len(new_nodes)} new exploration directions from node {node_id}'
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
