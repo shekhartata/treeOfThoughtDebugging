@@ -1,0 +1,68 @@
+.hypothesis-card {
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    border: 2px solid #e0e0e0;
+    transition: all 0.3s;
+}
+
+.hypothesis-card.active {
+    border-color: #4caf50;
+}
+
+.hypothesis-card.pruned {
+    border-color: #f44336;
+    opacity: 0.6;
+}
+
+.hypothesis-card.accepted {
+    border-color: #2196f3;
+    border-width: 3px;
+}
+
+.hypothesis-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+
+.hypothesis-title {
+    font-weight: 600;
+    color: #333;
+    flex: 1;
+    margin-right: 10px;
+}
+
+.confidence-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: white;
+}
+
+.confidence-badge.confidence-high {
+    background: #4caf50;
+}
+
+.confidence-badge.confidence-medium {
+    background: #ff9800;
+}
+
+.confidence-badge.confidence-low {
+    background: #f44336;
+}
+
+.evidence-list {
+    margin-top: 10px;
+    padding-left: 20px;
+    font-size: 13px;
+    color: #666;
+}
+
+.evidence-list li {
+    margin: 5px 0;
+}
+

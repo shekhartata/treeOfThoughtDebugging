@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 
 # Initialize global instances
@@ -28,7 +28,11 @@ llm_integration = LLMIntegration(require_llm=True)
 @app.route('/')
 def index():
     """Serve the main application page."""
-    return render_template('index.html')
+    # Check if React build exists, otherwise serve old template
+    if os.path.exists('static/index.html'):
+        return send_from_directory('static', 'index.html')
+    else:
+        return render_template('index.html')
 
 @app.route('/api/initialize', methods=['POST'])
 def initialize():
@@ -192,6 +196,9 @@ def get_current_node():
     # Get ALL hypotheses by traversing the tree (not just root)
     all_hypotheses = engine.get_all_hypotheses_from_tree()
     
+    # Get all branches for branch selection UI
+    branches = engine.get_all_branches_for_ui()
+    
     return jsonify({
         'node': {
             'id': node.id,
@@ -227,9 +234,13 @@ def get_current_node():
             }
             for h in all_hypotheses
         ],
+        'branches': branches,  # Add branches for branch selection
         'tree_summary': engine.get_tree_summary(),
         'current_branch_ids': engine.current_branch_ids,
-        'is_focused': len(engine.current_branch_ids) > 0
+        'is_focused': len(engine.current_branch_ids) > 0,
+        'step_number': node.step_number,
+        'current_node_id': engine.current_node_id,
+        'root_node_id': engine.root_node_id
     })
 
 @app.route('/api/backtrack', methods=['POST'])
@@ -274,6 +285,10 @@ def backtrack():
                     'confidence': hyp.confidence
                 }
         
+        # Get ALL hypotheses and branches for UI update
+        all_hypotheses = engine.get_all_hypotheses_from_tree()
+        branches = engine.get_all_branches_for_ui()
+        
         return jsonify({
             'success': True,
             'node': {
@@ -298,11 +313,27 @@ def backtrack():
                     for h in node.hypotheses
                 ] if hasattr(node, 'hypotheses') and node.hypotheses else []
             },
+            'all_hypotheses': [
+                {
+                    'id': h.id,
+                    'description': h.description,
+                    'category': h.category,
+                    'confidence': h.confidence,
+                    'status': h.status,
+                    'evidence': h.evidence
+                }
+                for h in all_hypotheses
+            ],
+            'branches': branches,
             'branch_info': branch_info,
             'current_branch_ids': engine.current_branch_ids,
             'is_focused': len(engine.current_branch_ids) > 0,
             'was_restored': was_restored,
-            'restored_hypothesis': restored_hypothesis
+            'restored_hypothesis': restored_hypothesis,
+            'tree_summary': engine.get_tree_summary(),
+            'step_number': node.step_number,
+            'current_node_id': engine.current_node_id,
+            'root_node_id': engine.root_node_id
         })
     except ValueError as e:
         return jsonify({'error': str(e)}), 404
@@ -440,6 +471,49 @@ def auto_backtrack():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/focus-branch', methods=['POST'])
+def focus_branch():
+    """Focus on a specific branch for future artifact evaluation."""
+    global engine
+    
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    
+    data = request.json
+    hypothesis_id = data.get('hypothesis_id')
+    
+    if not hypothesis_id:
+        return jsonify({'error': 'hypothesis_id is required'}), 400
+    
+    try:
+        # Set current_branch_ids to focus on this hypothesis
+        engine.current_branch_ids = [hypothesis_id]
+        
+        # Get all hypotheses to return updated state
+        all_hypotheses = engine.get_all_hypotheses_from_tree()
+        branches = engine.get_all_branches_for_ui()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Focused on branch {hypothesis_id}. Future artifacts will only evaluate this branch.',
+            'current_branch_ids': engine.current_branch_ids,
+            'is_focused': True,
+            'all_hypotheses': [
+                {
+                    'id': h.id,
+                    'description': h.description,
+                    'category': h.category,
+                    'confidence': h.confidence,
+                    'status': h.status,
+                    'evidence': h.evidence
+                }
+                for h in all_hypotheses
+            ],
+            'branches': branches
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/unfocus', methods=['POST'])
 def unfocus():
     """Clear branch focus and return to evaluating all active branches."""
@@ -459,8 +533,8 @@ def unfocus():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/expand-node', methods=['POST'])
-def expand_node():
+@app.route('/api/generate-node', methods=['POST'])
+def generate_node():
     """Expand a node by generating new sub-hypotheses or exploration directions."""
     global engine
     
@@ -478,6 +552,7 @@ def expand_node():
         
         # Get ALL hypotheses by traversing the tree (includes new ones from parent node)
         all_hypotheses = engine.get_all_hypotheses_from_tree()
+        branches = engine.get_all_branches_for_ui()
         
         return jsonify({
             'success': True,
@@ -509,6 +584,7 @@ def expand_node():
                 }
                 for h in all_hypotheses
             ],
+            'branches': branches,
             'message': f'Generated {len(new_nodes)} new exploration directions from node {node_id}'
         })
     except ValueError as e:
@@ -576,11 +652,34 @@ def unprune_branch():
     
     try:
         engine.unprune_branch(hypothesis_id)
+        
+        # Get updated state after unpruning
+        all_hypotheses = engine.get_all_hypotheses_from_tree()
+        branches = engine.get_all_branches_for_ui()
+        node = engine.get_current_node()
+        
         return jsonify({
             'success': True,
             'message': f'Branch {hypothesis_id} restored to active',
             'hypothesis_id': hypothesis_id,
-            'tree_summary': engine.get_tree_summary()
+            'all_hypotheses': [
+                {
+                    'id': h.id,
+                    'description': h.description,
+                    'category': h.category,
+                    'confidence': h.confidence,
+                    'status': h.status,
+                    'evidence': h.evidence
+                }
+                for h in all_hypotheses
+            ],
+            'branches': branches,
+            'tree_summary': engine.get_tree_summary(),
+            'current_branch_ids': engine.current_branch_ids,
+            'is_focused': len(engine.current_branch_ids) > 0,
+            'step_number': node.step_number if node else None,
+            'current_node_id': engine.current_node_id,
+            'root_node_id': engine.root_node_id
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500

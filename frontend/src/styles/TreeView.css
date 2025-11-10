@@ -1,0 +1,67 @@
+.tree-view-container {
+    width: 100%;
+    margin-top: 15px;
+}
+
+.tree-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+
+.tree-legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #666;
+}
+
+.legend-color {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+
+.legend-color.active {
+    background: #4caf50;
+}
+
+.legend-color.pruned {
+    background: #f44336;
+}
+
+.legend-color.accepted {
+    background: #2196f3;
+}
+
+.legend-color.current {
+    background: #9c27b0;
+    border: 2px solid #4caf50;
+}
+
+.tree-hint {
+    font-size: 12px;
+    color: #666;
+    display: flex;
+    align-items: center;
+}
+
+.tree-empty {
+    padding: 40px;
+    text-align: center;
+    color: #666;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+

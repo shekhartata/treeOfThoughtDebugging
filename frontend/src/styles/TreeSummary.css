@@ -1,0 +1,27 @@
+.tree-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.summary-card {
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.summary-value {
+    font-size: 2em;
+    font-weight: 700;
+    color: #667eea;
+}
+
+.summary-label {
+    color: #666;
+    font-size: 14px;
+    margin-top: 5px;
+}
+

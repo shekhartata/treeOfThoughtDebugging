@@ -651,13 +651,20 @@ class TreeOfThoughtEngine:
         for node in self.nodes:
             if node.hypothesis_id == hypothesis_id:
                 node.branch_status = "active"
+                # Also update the hypothesis object in the node if it exists
+                if node.hypothesis and node.hypothesis.id == hypothesis_id:
+                    node.hypothesis.status = "active"
         
         # Also update root node's hypothesis list
         root_node = self._get_node(self.root_node_id)
-        for hyp in root_node.hypotheses:
-            if hyp.id == hypothesis_id:
-                hyp.status = "active"
-                break
+        if root_node:
+            for hyp in root_node.hypotheses:
+                if hyp.id == hypothesis_id:
+                    hyp.status = "active"
+                    # Ensure master tracking is also updated
+                    if hypothesis:
+                        hyp.status = "active"
+                    break
         
         # Update child_hypotheses in any parent nodes that have this hypothesis
         for node in self.nodes:
