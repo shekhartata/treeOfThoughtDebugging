@@ -793,7 +793,7 @@ class TreeOfThoughtEngine:
                 id=f"hyp_{len(self.all_hypotheses) + 1}",
                 description=hyp_data['description'],
                 category=hyp_data['category'],
-                prior_score=hyp_data['confidence'],
+                prior_score=hyp_data.get('prior_score', hyp_data.get('confidence', 0.5)),
                 confidence=hyp_data['confidence']
             )
             if 'rationale' in hyp_data and hyp_data['rationale']:
@@ -1077,9 +1077,12 @@ class TreeOfThoughtEngine:
         return False
     
     def get_final_analysis(self) -> Dict:
-        """Generate final root cause analysis using LLM."""
-        node = self.get_current_node()
-        if not node:
+        """Generate final root cause analysis using LLM.
+        
+        Performs tree traversal to consider ALL active hypotheses from the entire tree,
+        prioritized by confidence score.
+        """
+        if not self.root_node_id:
             return {}
         
         # LLM is REQUIRED for final analysis
@@ -1089,15 +1092,18 @@ class TreeOfThoughtEngine:
         try:
             llm_analysis = self.llm_integration.generate_final_analysis_llm(self)
             
-            # Get top hypotheses for category/confidence metadata
+            # Tree traversal: Get ALL active hypotheses from entire tree (not just current node)
+            all_active_hypotheses = self.get_all_active_hypotheses_from_tree()
+            
+            # Sort all active hypotheses by confidence (descending) - prioritize by confidence
             top_hypotheses = sorted(
-                [h for h in node.hypotheses if h.status in ["active", "accepted"]],
+                all_active_hypotheses,
                 key=lambda x: x.confidence,
                 reverse=True
             )
             
-            # Check if all hypotheses were pruned
-            all_pruned = len([h for h in node.hypotheses if h.status == "pruned"]) == len(node.hypotheses)
+            # Check if all hypotheses were pruned (from entire tree)
+            all_pruned = len(top_hypotheses) == 0
             
             # Use LLM analysis as primary source
             # LLM will provide recommendations even if all hypotheses are pruned

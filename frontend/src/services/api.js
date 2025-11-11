@@ -34,6 +34,11 @@ export const getCurrentNode = async () => {
   return response.data;
 };
 
+export const checkSession = async () => {
+  const response = await api.get('/check-session');
+  return response.data;
+};
+
 export const backtrack = async (nodeId, autoRestore = true) => {
   const response = await api.post('/backtrack', {
     node_id: nodeId,

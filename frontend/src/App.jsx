@@ -3,19 +3,13 @@ import './App.css';
 import InitializeForm from './components/InitializeForm';
 import CurrentState from './components/CurrentState';
 import TreeView from './components/TreeView';
-import { getCurrentNode } from './services/api';
+import { getCurrentNode, checkSession } from './services/api';
 
 function App() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentState, setCurrentState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-
-  useEffect(() => {
-    if (isInitialized) {
-      loadCurrentState();
-    }
-  }, [isInitialized]);
 
   const loadCurrentState = async () => {
     try {
@@ -29,6 +23,29 @@ function App() {
       setLoading(false);
     }
   };
+
+  // Auto-detect existing session on mount
+  useEffect(() => {
+    const detectSession = async () => {
+      try {
+        const result = await checkSession();
+        if (result.has_session) {
+          setIsInitialized(true);
+          // loadCurrentState will be called by the next useEffect when isInitialized becomes true
+        }
+      } catch (err) {
+        // Session doesn't exist or error - that's fine, show init form
+        console.log('No existing session found');
+      }
+    };
+    detectSession();
+  }, []); // Run only once on mount
+
+  useEffect(() => {
+    if (isInitialized) {
+      loadCurrentState();
+    }
+  }, [isInitialized]);
 
   const handleInitialized = (data) => {
     setIsInitialized(true);

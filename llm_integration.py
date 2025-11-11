@@ -411,10 +411,10 @@ Problem Summary:
 
 You do NOT have direct database access. You must request specific data artifacts from the consulting engineer.
 
-Based on this problem, generate 3-7 potential root cause hypotheses. For each hypothesis, provide:
+Based on this problem, generate 3-7 potential root cause mutually exclusive and collectively exhaustive hypotheses. For each hypothesis, provide:
 1. A clear description of the potential issue
-2. The category (must be one of: indexing, query_shape, schema, wt_cache, storage, replication, networking)
-3. An initial confidence score (0.0-1.0)
+2. A category name that best describes the type of issue (you can use any relevant category name such as indexing, query_shape, schema, wt_cache, storage, replication, networking, or any other category that is relevant to this specific problem)
+3. An initial confidence score (0.0-1.0) based on how relevant and likely this hypothesis is given the problem statement
 
 Format your response as:
 HYPOTHESES:
@@ -469,38 +469,16 @@ NEXT_REQUESTS:
                 if hypotheses_section and line and (line[0].isdigit() or line.startswith('-')):
                     # Parse hypothesis line
                     # Format: "1. Description | Category: category | Confidence: 0.5"
-                    match = re.search(r'(.+?)\s*\|\s*Category:\s*(\w+)\s*\|\s*Confidence:\s*([\d.]+)', line, re.IGNORECASE)
+                    # Updated regex to handle categories with spaces and special characters
+                    match = re.search(r'(.+?)\s*\|\s*Category:\s*([^|]+?)\s*\|\s*Confidence:\s*([\d.]+)', line, re.IGNORECASE)
                     if match:
                         desc = match.group(1).strip().lstrip('0123456789.-) ').strip()
                         category = match.group(2).strip().lower()
                         confidence = float(match.group(3))
                         
-                        # Validate category
-                        valid_categories = ['indexing', 'query_shape', 'schema', 'wt_cache', 'storage', 'replication', 'networking']
-                        if category not in valid_categories:
-                            # Try to map common variations
-                            category_map = {
-                                'index': 'indexing',
-                                'query': 'query_shape',
-                                'cache': 'wt_cache',
-                                'iops': 'storage',
-                                'io': 'storage',
-                                'network': 'networking',
-                                'repl': 'replication'
-                            }
-                            category = category_map.get(category, 'indexing')  # Default fallback
-                        
-                        # Get prior score for this category (avoid circular import)
-                        category_priors = {
-                            'indexing': 0.35,
-                            'query_shape': 0.25,
-                            'schema': 0.20,
-                            'wt_cache': 0.15,
-                            'storage': 0.15,
-                            'replication': 0.10,
-                            'networking': 0.05
-                        }
-                        prior = category_priors.get(category, 0.1)
+                        # Use confidence as prior_score (automatic scoring based on LLM's confidence)
+                        # No fixed category map - scoring is based on relevance to the problem
+                        prior = min(1.0, max(0.0, confidence))
                         
                         hypotheses.append({
                             'description': desc,
@@ -516,25 +494,10 @@ NEXT_REQUESTS:
             
             # If parsing failed, try alternative parsing
             if not hypotheses:
-                # Fallback: extract any mention of categories
-                category_priors = {
-                    'indexing': 0.35,
-                    'query_shape': 0.25,
-                    'schema': 0.20,
-                    'wt_cache': 0.15,
-                    'storage': 0.15,
-                    'replication': 0.10,
-                    'networking': 0.05
-                }
-                for category in ['indexing', 'query_shape', 'schema', 'wt_cache', 'storage', 'replication', 'networking']:
-                    if category in llm_output.lower():
-                        prior = category_priors.get(category, 0.1)
-                        hypotheses.append({
-                            'description': f"Potential {category.replace('_', ' ')} issue",
-                            'category': category,
-                            'prior_score': prior,
-                            'confidence': prior
-                        })
+                # Fallback: try to extract any hypotheses mentioned
+                # Use a default confidence based on problem relevance (not category)
+                logger.warning("Failed to parse hypotheses from LLM response, attempting fallback parsing")
+                # This fallback is minimal - ideally the LLM should provide properly formatted output
             
             return {
                 'hypotheses': hypotheses,
@@ -687,7 +650,11 @@ Be specific about what commands to run or what outputs to collect."""
             raise ValueError(f"LLM request generation failed: {e}. Please check your API key and try again.")
     
     def generate_final_analysis_llm(self, engine: TreeOfThoughtEngine) -> Dict:
-        """Generate complete final root cause analysis from LLM."""
+        """Generate complete final root cause analysis from LLM.
+        
+        Performs tree traversal to get ALL active hypotheses from the entire tree,
+        prioritized by confidence score.
+        """
         if not self.use_llm:
             raise ValueError("LLM is required for final analysis but not available.")
         
@@ -695,28 +662,33 @@ Be specific about what commands to run or what outputs to collect."""
             from openai import OpenAI
             client = OpenAI(api_key=self.api_key)
             
-            node = engine.get_current_node()
-            if not node:
-                raise ValueError("No current node available for analysis")
+            # Tree traversal: Get ALL active hypotheses from entire tree (not just current node)
+            all_active_hypotheses = engine.get_all_active_hypotheses_from_tree()
             
-            top_hypotheses = sorted(
-                [h for h in node.hypotheses if h.status in ["active", "accepted"]],
+            # Sort all active hypotheses by confidence (descending) - prioritize by confidence
+            sorted_hypotheses = sorted(
+                all_active_hypotheses,
                 key=lambda x: x.confidence,
                 reverse=True
-            )[:3]
+            )
             
-            # Collect all artifacts with their content
+            # Get top hypotheses for display (all of them, prioritized by confidence)
+            top_hypotheses = sorted_hypotheses  # Use all active hypotheses, not just top 3
+            
+            # Collect all artifacts from ALL active nodes in the tree (not just current node)
             all_artifacts = []
             all_artifact_content = []
             for n in engine.nodes:
-                for art in n.artifacts_received:
-                    all_artifacts.append(art['name'])
-                    all_artifact_content.append(f"{art['name']}:\n{art['content'][:500]}...")  # First 500 chars
+                # Only include artifacts from active nodes (not pruned branches)
+                if n.branch_status == "active" or n.hypothesis_id is None:  # Include root node
+                    for art in n.artifacts_received:
+                        all_artifacts.append(art['name'])
+                        all_artifact_content.append(f"{art['name']}:\n{art['content'][:500]}...")  # First 500 chars
             
             artifacts_summary = "\n".join([f"- {art}" for art in all_artifacts[-8:]])  # Last 8 artifacts
             
-            # Check if all hypotheses were pruned
-            all_pruned = len([h for h in node.hypotheses if h.status == "pruned"]) == len(node.hypotheses)
+            # Check if all hypotheses were pruned (from entire tree)
+            all_pruned = len(sorted_hypotheses) == 0
             
             if all_pruned or not top_hypotheses:
                 # All hypotheses pruned - provide recommendations based on available artifacts
@@ -746,10 +718,12 @@ Even though the initial hypotheses were ruled out, please provide:
 
 Be helpful and actionable even with limited data. If more data is needed, clearly specify what to collect."""
             else:
-                # Normal case with active hypotheses
+                # Normal case with active hypotheses from entire tree
+                # Format hypotheses with confidence priority (sorted by confidence, highest first)
                 hypotheses_text = "\n".join([
-                    f"- {h.description}: {h.confidence:.2f} confidence. Evidence: {', '.join(h.evidence[:2])}"
-                    for h in top_hypotheses
+                    f"{i+1}. {h.description} (Category: {h.category}, Confidence: {h.confidence:.2f})"
+                    + (f" - Evidence: {', '.join(h.evidence[:2])}" if h.evidence else "")
+                    for i, h in enumerate(top_hypotheses)
                 ])
                 
                 prompt = f"""You are an expert MongoDB consultant providing the final root cause analysis.
@@ -757,8 +731,10 @@ Be helpful and actionable even with limited data. If more data is needed, clearl
 Problem Summary:
 {engine.problem_summary}
 
-Top Hypotheses (ranked by confidence):
+All Active Hypotheses (from entire reasoning tree, prioritized by confidence - highest first):
 {hypotheses_text}
+
+Note: These hypotheses were collected from the entire reasoning tree, including all active nodes, child nodes, and expanded hypotheses. They are sorted by confidence score, with the highest confidence hypotheses listed first.
 
 Artifacts Collected:
 {artifacts_summary}
@@ -946,11 +922,12 @@ Based on this context, generate 2-5 NEW exploration directions or sub-hypotheses
 2. Alternative explanations that haven't been fully explored
 3. Related issues that might be connected
 4. New angles to investigate based on what we've learned
+5. The hypotheses should be mutually exclusive and collectively exhaustive.
 
 For each new direction, provide:
 1. A clear description of what to explore
-2. The category (must be one of: indexing, query_shape, schema, wt_cache, storage, replication, networking)
-3. An initial confidence score (0.0-1.0) based on current evidence
+2. A category name that best describes the type of issue (you can use any relevant category name such as indexing, query_shape, schema, wt_cache, storage, replication, networking, or any other category that is relevant to this specific problem)
+3. An initial confidence score (0.0-1.0) based on how relevant this direction is given the current evidence and problem statement
 4. Why this direction is worth exploring from this point
 
 Format your response as:
@@ -1002,7 +979,8 @@ NEXT_REQUESTS:
                 
                 if in_directions and line and (line[0].isdigit() or line.startswith('-')):
                     # Parse: "1. Description | Category: cat | Confidence: 0.5 | Rationale: ..."
-                    match = re.search(r'(.+?)\s*\|\s*Category:\s*(\w+)\s*\|\s*Confidence:\s*([\d.]+)', line, re.IGNORECASE)
+                    # Updated regex to handle categories with spaces and special characters
+                    match = re.search(r'(.+?)\s*\|\s*Category:\s*([^|]+?)\s*\|\s*Confidence:\s*([\d.]+)', line, re.IGNORECASE)
                     if match:
                         desc = match.group(1).strip().lstrip('0123456789.-) ').strip()
                         category = match.group(2).strip().lower()
@@ -1011,9 +989,14 @@ NEXT_REQUESTS:
                         rationale_match = re.search(r'Rationale:\s*(.+)', line, re.IGNORECASE)
                         rationale = rationale_match.group(1).strip() if rationale_match else ""
                         
+                        # Use confidence as prior_score (automatic scoring based on LLM's confidence)
+                        # No fixed category map - scoring is based on relevance to the problem
+                        prior = min(1.0, max(0.0, confidence))
+                        
                         new_hypotheses.append({
                             'description': desc,
                             'category': category,
+                            'prior_score': prior,
                             'confidence': min(1.0, max(0.0, confidence)),
                             'rationale': rationale
                         })

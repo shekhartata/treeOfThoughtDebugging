@@ -181,6 +181,14 @@ def upload_artifact():
         'is_focused': len(engine.current_branch_ids) > 0
     })
 
+@app.route('/api/check-session', methods=['GET'])
+def check_session():
+    """Check if an active session exists."""
+    global engine
+    return jsonify({
+        'has_session': engine is not None and engine.root_node_id is not None
+    })
+
 @app.route('/api/current-node', methods=['GET'])
 def get_current_node():
     """Get the current reasoning node."""
