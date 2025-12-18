@@ -166,7 +166,7 @@ Be specific about what evidence you found in the artifact that relates to each h
                     {"role": "system", "content": "You are an expert MongoDB consultant. Provide detailed, structured analysis of diagnostic data."},
                     {"role": "user", "content": prompt}
                 ],
-                max_completion_tokens=8000  # Significantly increased to allow for reasoning tokens + actual content
+                max_completion_tokens=10000  # Significantly increased to allow for reasoning tokens + actual content
             )
             
             llm_output = response.choices[0].message.content
@@ -315,7 +315,7 @@ Be specific about what evidence you found in the artifact that relates to each h
                     {"role": "system", "content": "You are an expert MongoDB consultant. Provide detailed, structured analysis of diagnostic data across multiple hypothesis branches."},
                     {"role": "user", "content": prompt}
                 ],
-                max_completion_tokens=8000
+                max_completion_tokens=10000
             )
             
             llm_output = response.choices[0].message.content
@@ -332,17 +332,25 @@ Be specific about what evidence you found in the artifact that relates to each h
             # Parse evaluation results for each branch
             results = {}
             current_branch_id = None
+            evidence_summary = ""
             
             lines = llm_output.split('\n')
             in_evaluations = False
+            in_summary = False
             
             for line in lines:
                 line = line.strip()
                 if 'BRANCH_EVALUATIONS:' in line.upper():
                     in_evaluations = True
+                    in_summary = False
                     continue
                 if 'EVIDENCE_SUMMARY:' in line.upper():
                     in_evaluations = False
+                    in_summary = True
+                    continue
+                
+                if in_summary:
+                    evidence_summary += line + " "
                     continue
                 
                 if in_evaluations:
@@ -350,13 +358,14 @@ Be specific about what evidence you found in the artifact that relates to each h
                     branch_match = re.search(r'BRANCH\s+([^\s:]+)', line, re.IGNORECASE)
                     if branch_match:
                         current_branch_id = branch_match.group(1).strip()
-                        results[current_branch_id] = {'scores': {}, 'evidence': {}}
+                        results[current_branch_id] = {'scores': {}, 'evidence': {}, 'status': 'neutral'}
                         continue
                     
-                    # Parse confidence and evidence for current branch
+                    # Parse confidence, evidence, and status for current branch
                     if current_branch_id:
                         confidence_match = re.search(r'Confidence:\s*([\d.]+)', line, re.IGNORECASE)
                         evidence_match = re.search(r'Evidence:\s*(.+?)(?:\s*Status:|$)', line, re.IGNORECASE)
+                        status_match = re.search(r'Status:\s*(\w+)', line, re.IGNORECASE)
                         
                         if confidence_match:
                             score = float(confidence_match.group(1))
@@ -369,6 +378,8 @@ Be specific about what evidence you found in the artifact that relates to each h
                                     results[current_branch_id]['scores'][category] = score
                                     if evidence_match:
                                         results[current_branch_id]['evidence'][category] = evidence_match.group(1).strip()
+                                    if status_match:
+                                        results[current_branch_id]['status'] = status_match.group(1).lower()
                                     break
             
             # Fallback: if parsing failed, try to extract from text
@@ -377,7 +388,7 @@ Be specific about what evidence you found in the artifact that relates to each h
                     if node.hypothesis:
                         hyp_id = node.hypothesis_id
                         category = node.hypothesis.category
-                        results[hyp_id] = {'scores': {}, 'evidence': {}}
+                        results[hyp_id] = {'scores': {}, 'evidence': {}, 'status': 'neutral', 'llm_reasoning': llm_output, 'evidence_summary': evidence_summary.strip()}
                         
                         # Try to find confidence for this category
                         pattern = rf"{category}.*?(\d+\.?\d*)"
@@ -385,6 +396,13 @@ Be specific about what evidence you found in the artifact that relates to each h
                         if match:
                             score = float(match.group(1))
                             results[hyp_id]['scores'][category] = min(1.0, max(0.0, score / 10.0 if score > 1 else score))
+            
+            # Add full LLM reasoning and evidence summary to results (if not already added in fallback)
+            for hyp_id in results:
+                if 'llm_reasoning' not in results[hyp_id]:
+                    results[hyp_id]['llm_reasoning'] = llm_output
+                if 'evidence_summary' not in results[hyp_id]:
+                    results[hyp_id]['evidence_summary'] = evidence_summary.strip()
             
             return results
             
@@ -411,7 +429,7 @@ Problem Summary:
 
 You do NOT have direct database access. You must request specific data artifacts from the consulting engineer.
 
-Based on this problem, generate 3-7 potential root cause mutually exclusive and collectively exhaustive hypotheses. For each hypothesis, provide:
+Based on this problem, generate 3-7 potential root cause mutually exclusive and collectively exhaustive hypotheses analyzing the problem statement. For each hypothesis, provide:
 1. A clear description of the potential issue
 2. A category name that best describes the type of issue (you can use any relevant category name such as indexing, query_shape, schema, wt_cache, storage, replication, networking, or any other category that is relevant to this specific problem)
 3. An initial confidence score (0.0-1.0) based on how relevant and likely this hypothesis is given the problem statement
@@ -433,7 +451,7 @@ NEXT_REQUESTS:
                     {"role": "system", "content": "You are an expert MongoDB consultant. Provide structured, actionable analysis."},
                     {"role": "user", "content": prompt}
                 ],
-                max_completion_tokens=8000  # Significantly increased to allow for reasoning tokens + actual content
+                max_completion_tokens=10000  # Significantly increased to allow for reasoning tokens + actual content
             )
 
             #logger.info(f"LLM hypothesis generation response: {response}")
@@ -600,7 +618,7 @@ Be specific about what commands to run or what outputs to collect."""
                     {"role": "system", "content": "You are an expert MongoDB consultant. Provide specific, actionable data requests."},
                     {"role": "user", "content": prompt}
                 ],
-                max_completion_tokens=8000  # Significantly increased to allow for reasoning tokens + actual content
+                max_completion_tokens=10000  # Significantly increased to allow for reasoning tokens + actual content
             )
             
             llm_output = response.choices[0].message.content
@@ -755,7 +773,7 @@ Format your response clearly with these sections. Be specific and actionable."""
                     {"role": "system", "content": "You are an expert MongoDB consultant providing comprehensive root cause analysis."},
                     {"role": "user", "content": prompt}
                 ],
-                max_completion_tokens=8000  # Significantly increased to allow for reasoning tokens + actual content
+                max_completion_tokens=10000  # Significantly increased to allow for reasoning tokens + actual content
             )
             
             llm_output = response.choices[0].message.content
@@ -947,7 +965,7 @@ NEXT_REQUESTS:
                     {"role": "system", "content": "You are an expert MongoDB consultant. Generate focused, actionable exploration directions from specific points in a reasoning tree."},
                     {"role": "user", "content": prompt}
                 ],
-                max_completion_tokens=8000
+                max_completion_tokens=10000
             )
             
             llm_output = response.choices[0].message.content

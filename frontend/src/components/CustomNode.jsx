@@ -3,11 +3,12 @@ import { Handle, Position } from 'reactflow';
 import '../styles/CustomNode.css';
 
 function CustomNode({ data }) {
-  const { label, node, isCurrent, status, onBacktrack, onGenerate } = data;
+  const { label, node, isCurrent, status, onBacktrack, onGenerate, onViewDetails } = data;
   
   const confidence = node.hypothesis?.confidence || node.confidence || 0;
   const confidencePercent = (confidence * 100).toFixed(0);
   const artifactCount = node.artifacts?.length || 0;
+  const hasEvaluationDetails = node.evaluation_details || node.pruning_details;
 
   const getStatusColor = () => {
     if (isCurrent) return '#9c27b0';
@@ -49,6 +50,15 @@ function CustomNode({ data }) {
             onClick={() => onGenerate()}
           >
             Generate
+          </button>
+        )}
+        {hasEvaluationDetails && onViewDetails && (
+          <button 
+            className="node-button details-button"
+            onClick={() => onViewDetails(node.id)}
+            title="View evaluation and pruning details"
+          >
+            View Details
           </button>
         )}
       </div>

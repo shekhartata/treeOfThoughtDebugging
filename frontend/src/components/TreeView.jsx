@@ -8,6 +8,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import CustomNode from './CustomNode';
+import EvaluationDetailsModal from './EvaluationDetailsModal';
 import api from '../services/api';
 import '../styles/TreeView.css';
 
@@ -20,6 +21,8 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
   const [reactNodes, setReactNodes, onNodesChange] = useNodesState([]);
   const [reactEdges, setEdges, onEdgesChange] = useEdgesState([]);
   const [loading, setLoading] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   // Load history if not provided
   useEffect(() => {
@@ -90,6 +93,10 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
           status,
           onBacktrack: () => handleBacktrack(nodeId),
           onGenerate: () => handleGenerate(nodeId),
+          onViewDetails: (id) => {
+            setSelectedNodeId(id);
+            setIsModalOpen(true);
+          },
         },
       };
 
@@ -197,6 +204,14 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
           <MiniMap />
         </ReactFlow>
       </div>
+      <EvaluationDetailsModal
+        nodeId={selectedNodeId}
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setSelectedNodeId(null);
+        }}
+      />
     </div>
   );
 }

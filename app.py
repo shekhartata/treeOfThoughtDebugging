@@ -53,15 +53,6 @@ def initialize():
     engine = TreeOfThoughtEngine(llm_integration=llm_integration)
     initial_node = engine.initialize(problem_summary, use_hardcoded_fallback=use_fallback)
     
-    # Get LLM analysis text for display
-    llm_analysis_text = ""
-    if llm_integration.use_llm and not use_fallback:
-        try:
-            result = llm_integration.get_initial_analysis(problem_summary)
-            llm_analysis_text = result.get('analysis', '')
-        except:
-            pass
-    
     return jsonify({
         'success': True,
         'node': {
@@ -79,7 +70,6 @@ def initialize():
             ],
             'requested_data': initial_node.requested_data
         },
-        'llm_analysis': llm_analysis_text,
         'tree_summary': engine.get_tree_summary()
     })
 
@@ -405,7 +395,9 @@ def get_history():
                 'artifacts_count': len(node.artifacts_received),
                 'artifacts': [{'name': art['name'], 'timestamp': art['timestamp']} for art in node.artifacts_received],
                 'confidence': node.hypothesis.confidence if node.hypothesis else 0.0,
-                'timestamp': node.timestamp.isoformat() if isinstance(node.timestamp, datetime) else str(node.timestamp)
+                'timestamp': node.timestamp.isoformat() if isinstance(node.timestamp, datetime) else str(node.timestamp),
+                'evaluation_details': node.evaluation_details if hasattr(node, 'evaluation_details') and node.evaluation_details else None,
+                'pruning_details': node.pruning_details if hasattr(node, 'pruning_details') and node.pruning_details else None
             }
             for node in engine.nodes
         ],
@@ -641,6 +633,29 @@ def prune_branch():
             'hypothesis_id': hypothesis_id,
             'tree_summary': engine.get_tree_summary()
         })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/node-evaluation-details/<node_id>', methods=['GET'])
+def get_node_evaluation_details(node_id):
+    """Get evaluation and pruning details for a specific node."""
+    global engine
+    
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    
+    try:
+        node = engine._get_node(node_id)
+        
+        return jsonify({
+            'node_id': node_id,
+            'evaluation_details': node.evaluation_details if hasattr(node, 'evaluation_details') and node.evaluation_details else None,
+            'pruning_details': node.pruning_details if hasattr(node, 'pruning_details') and node.pruning_details else None,
+            'has_evaluation': hasattr(node, 'evaluation_details') and node.evaluation_details is not None,
+            'has_pruning': hasattr(node, 'pruning_details') and node.pruning_details is not None
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

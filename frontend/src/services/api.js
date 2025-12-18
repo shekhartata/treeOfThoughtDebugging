@@ -90,5 +90,10 @@ export const resetSession = async () => {
   return response.data;
 };
 
+export const getNodeEvaluationDetails = async (nodeId) => {
+  const response = await api.get(`/node-evaluation-details/${nodeId}`);
+  return response.data;
+};
+
 export default api;
 

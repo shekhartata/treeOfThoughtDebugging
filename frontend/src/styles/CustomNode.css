@@ -111,3 +111,12 @@
     background: #45a049;
 }
 
+.details-button {
+    background: #667eea;
+    color: white;
+}
+
+.details-button:hover {
+    background: #5568d3;
+}
+

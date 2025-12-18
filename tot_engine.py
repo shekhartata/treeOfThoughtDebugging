@@ -70,6 +70,10 @@ class ReasoningNode:
     children_ids: List[str] = field(default_factory=list)
     branch_status: str = "active"  # active, pruned - status of this branch node
     
+    # Evaluation and pruning details for transparency
+    evaluation_details: Optional[Dict] = None  # Stores detailed LLM evaluation reasoning
+    pruning_details: Optional[Dict] = None  # Stores pruning logic if pruned
+    
     # Legacy field for backward compatibility (root node only)
     hypotheses: List[Hypothesis] = field(default_factory=list)
     
@@ -492,6 +496,10 @@ class TreeOfThoughtEngine:
                 scores = result.get('scores', {})
                 evidence_map = result.get('evidence', {})
                 
+                # Store previous confidence for evaluation details (from master hypothesis before update)
+                master_hyp = self.all_hypotheses.get(hyp_id)
+                previous_confidence = master_hyp.confidence if master_hyp else (new_node.hypothesis.confidence if new_node.hypothesis else 0.0)
+                
                 # Update the hypothesis in the node
                 if new_node.hypothesis:
                     category = new_node.hypothesis.category
@@ -506,6 +514,19 @@ class TreeOfThoughtEngine:
                     # Update status
                     if new_node.hypothesis.confidence >= self.SUCCESS_THRESHOLD:
                         new_node.hypothesis.status = "accepted"
+                    
+                    # Store evaluation details in the node
+                    new_node.evaluation_details = {
+                        'llm_reasoning': result.get('llm_reasoning', ''),
+                        'evidence_found': evidence_map.get(category, ''),
+                        'evidence_summary': result.get('evidence_summary', ''),
+                        'confidence_before': previous_confidence,
+                        'confidence_after': new_node.hypothesis.confidence,
+                        'confidence_change': new_node.hypothesis.confidence - previous_confidence,
+                        'status': result.get('status', 'neutral'),  # supported/contradicted/neutral
+                        'artifact_name': artifact_name,
+                        'evaluated_at': datetime.now().isoformat()
+                    }
                     
                     # Update the master hypothesis tracking
                     self.all_hypotheses[hyp_id].llm_score = new_node.hypothesis.llm_score
@@ -581,22 +602,40 @@ class TreeOfThoughtEngine:
             master_hyp = self.all_hypotheses.get(hypothesis.id)
             current_confidence = master_hyp.confidence if master_hyp else hypothesis.confidence
             
+            # Determine pruning reason and threshold
+            pruning_reason = None
+            threshold_used = None
+            was_top_hypothesis = hypothesis in top_hypotheses
+            
             # If it's in the top 2, only prune if confidence < 5%
             if hypothesis in top_hypotheses:
                 if current_confidence < MIN_PROTECTED_CONFIDENCE:
+                    pruning_reason = f"Top hypothesis but confidence {current_confidence:.2%} below minimum protected threshold ({MIN_PROTECTED_CONFIDENCE:.0%})"
+                    threshold_used = MIN_PROTECTED_CONFIDENCE
                     logger.info(f"Pruning top hypothesis {hypothesis.id} with confidence {current_confidence:.2%} (< 5%)")
-                    self.prune_branch(hypothesis.id)
+                    self.prune_branch(hypothesis.id, pruning_reason, threshold_used, current_confidence, was_top_hypothesis)
             # Otherwise, prune if below normal threshold
             else:
                 if current_confidence < self.PRUNE_THRESHOLD:
+                    pruning_reason = f"Confidence {current_confidence:.2%} below pruning threshold ({self.PRUNE_THRESHOLD:.0%})"
+                    threshold_used = self.PRUNE_THRESHOLD
                     logger.info(f"Pruning hypothesis {hypothesis.id} with confidence {current_confidence:.2%} (< {self.PRUNE_THRESHOLD:.0%})")
-                    self.prune_branch(hypothesis.id)
+                    self.prune_branch(hypothesis.id, pruning_reason, threshold_used, current_confidence, was_top_hypothesis)
     
-    def prune_branch(self, hypothesis_id: str):
+    def prune_branch(self, hypothesis_id: str, pruning_reason: Optional[str] = None, 
+                     threshold_used: Optional[float] = None, confidence_at_pruning: Optional[float] = None,
+                     was_top_hypothesis: bool = False):
         """
         Prune an entire branch by marking all nodes in that branch as pruned.
         The branch is kept in memory but excluded from active traversal.
         Also updates child_hypotheses in parent nodes.
+        
+        Args:
+            hypothesis_id: The hypothesis ID to prune
+            pruning_reason: Optional reason why this branch was pruned
+            threshold_used: Optional threshold value that triggered pruning
+            confidence_at_pruning: Optional confidence value at time of pruning
+            was_top_hypothesis: Whether this was in the top 2 hypotheses
         """
         # Always update master hypothesis tracking first (source of truth)
         hypothesis = self.all_hypotheses.get(hypothesis_id)
@@ -606,6 +645,17 @@ class TreeOfThoughtEngine:
             # Still try to update other references
         else:
             hypothesis.status = "pruned"
+        
+        # Store pruning details in the leaf node (most recent node in the branch)
+        leaf_node = self._get_branch_leaf(hypothesis_id)
+        if leaf_node and (pruning_reason or threshold_used is not None):
+            leaf_node.pruning_details = {
+                'pruned_at': datetime.now().isoformat(),
+                'reason': pruning_reason or 'Branch pruned due to low confidence',
+                'threshold_used': threshold_used,
+                'confidence_at_pruning': confidence_at_pruning or (hypothesis.confidence if hypothesis else 0.0),
+                'was_top_hypothesis': was_top_hypothesis
+            }
         
         # Mark all nodes in this branch as pruned
         for node in self.nodes:
