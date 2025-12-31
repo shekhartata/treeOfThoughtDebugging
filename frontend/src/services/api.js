@@ -9,11 +9,46 @@ const api = axios.create({
   },
 });
 
-export const initializeEngine = async (problemSummary, useHardcodedFallback = false) => {
-  const response = await api.post('/initialize', {
+export const detectLocalOllama = async (baseUrl = 'http://localhost:11434', timeout = 2.0) => {
+  try {
+    const response = await api.get('/detect-local-llm', {
+      params: {
+        base_url: baseUrl,
+        timeout: timeout
+      }
+    });
+    console.log('Detection API response:', response.data); // Debug log
+    return response.data;
+  } catch (error) {
+    // Log the full error for debugging
+    console.error('Detection API error:', error);
+    console.error('Error response:', error.response?.data);
+    // Return error details
+    return { 
+      available: false, 
+      error: error.response?.data?.error || error.message || 'Unknown error occurred'
+    };
+  }
+};
+
+export const initializeEngine = async (problemSummary, useHardcodedFallback = false, provider = null, model = null, baseUrl = null) => {
+  const body = {
     problem_summary: problemSummary,
     use_hardcoded_fallback: useHardcodedFallback,
-  });
+  };
+  
+  // Add provider/model selection if provided
+  if (provider) {
+    body.provider = provider;
+  }
+  if (model) {
+    body.model = model;
+  }
+  if (baseUrl) {
+    body.base_url = baseUrl;
+  }
+  
+  const response = await api.post('/initialize', body);
   return response.data;
 };
 

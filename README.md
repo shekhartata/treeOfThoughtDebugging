@@ -289,18 +289,57 @@ The tool provides a REST API for programmatic access:
 - Python 3.8+
 - Flask 3.0+
 - Node.js 16+
-- **OpenAI API key (REQUIRED)** - The tool uses GPT-5 for all LLM operations
+- **LLM API key (REQUIRED)** - One of the following:
+  - OpenAI API key (for GPT-5) - default
+  - Groq API key (for DeepSeek-R1-Distill-Llama-70B) - faster inference
+
+## LLM Provider Configuration
+
+The tool supports multiple LLM providers via an adapter pattern. You can switch providers without code changes.
+
+### Available Providers
+
+| Provider | Model | Speed | Notes |
+|----------|-------|-------|-------|
+| `openai` | GPT-5 | ~50 tokens/sec | Default, high quality |
+| `groq` | DeepSeek-R1-Distill-Llama-70B | ~300+ tokens/sec | Fast inference, good for ToT |
+
+### Switching Providers
+
+**Option 1: Environment Variable**
+```bash
+# Use OpenAI (default)
+export LLM_PROVIDER=openai
+export OPENAI_API_KEY=sk-your-key-here
+
+# Use Groq (faster)
+export LLM_PROVIDER=groq
+export GROQ_API_KEY=gsk-your-key-here
+```
+
+**Option 2: .env File**
+```
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk-your-key-here
+OPENAI_API_KEY=sk-your-key-here
+```
+
+### Getting API Keys
+
+- **OpenAI**: https://platform.openai.com/api-keys
+- **Groq**: https://console.groq.com/keys (free tier available)
 
 ## Important Notes
 
-- **LLM is REQUIRED** - The tool is fully LLM-driven using GPT-5 for:
+- **LLM is REQUIRED** - The tool is fully LLM-driven for:
   - Hypothesis generation
   - Artifact evaluation
   - Next data requests
   - Final root cause analysis
+- **Adapter Pattern**: LLM providers are swappable via `llm_adapters/` module
 - **Error Logging**: All LLM failures are logged with detailed error information for debugging
 - **Fallback Support**: If LLM fails, the tool falls back to hardcoded hypotheses (pass `use_hardcoded_fallback=True`)
-- **Data Privacy**: Customer data is sent to OpenAI API for LLM processing
+- **Data Privacy**: Customer data is sent to LLM API for processing
 - **Session Management**: Use "End Debugging Session" to clear all tree content and start fresh with a new issue
 - **Smart Pruning**: Top 2 hypotheses are protected from pruning unless confidence < 5%
 - **Final Analysis**: Available at any time, not just when session is complete
@@ -347,16 +386,23 @@ npm run build
 
 ### LLM/API Issues
 
-**GPT-5 errors:**
-- Check that your OpenAI API key has access to GPT-5
-- Verify the API key is correctly set in `.env` file
+**LLM errors:**
+- Check that your API key is correctly set in `.env` file
+- Verify `LLM_PROVIDER` matches your API key (openai or groq)
 - Check error logs for detailed information about LLM failures
 - The tool will automatically fall back to hardcoded hypotheses if LLM is unavailable
 
+**Switching providers:**
+```bash
+# If OpenAI is slow or unavailable, try Groq:
+export LLM_PROVIDER=groq
+export GROQ_API_KEY=gsk-your-key-here
+```
+
 **Rate limiting:**
-- OpenAI API has rate limits
-- Reduce frequency of artifact uploads
-- Consider caching LLM responses (future enhancement)
+- Both OpenAI and Groq have rate limits
+- Groq has generous free tier for testing
+- Reduce frequency of artifact uploads if hitting limits
 
 ### General Issues
 
@@ -382,7 +428,13 @@ npm install
 treeOfThoughtProj/
 ├── app.py                 # Flask web application
 ├── tot_engine.py          # Core ToT reasoning engine
-├── llm_integration.py     # GPT-5 integration
+├── llm_integration.py     # LLM integration (thin wrapper over adapters)
+├── llm_adapters/          # LLM adapter pattern implementation
+│   ├── __init__.py        # Package exports
+│   ├── base_adapter.py    # Abstract base class for adapters
+│   ├── config.py          # Provider configuration and factory
+│   ├── openai_adapter.py  # OpenAI/GPT-5 adapter
+│   └── groq_adapter.py    # Groq/DeepSeek adapter (fast inference)
 ├── cli_tool.py            # Command-line interface
 ├── test_demo.py           # Demo/test script
 ├── requirements.txt       # Python dependencies

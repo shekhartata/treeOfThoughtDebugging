@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { initializeEngine } from '../services/api';
+import ModelSelector from './ModelSelector';
 import '../styles/InitializeForm.css';
 
 function InitializeForm({ onInitialized }) {
@@ -7,6 +8,15 @@ function InitializeForm({ onInitialized }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [useHardcodedFallback, setUseHardcodedFallback] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState(null);
+  const [selectedModel, setSelectedModel] = useState(null);
+  const [selectedBaseUrl, setSelectedBaseUrl] = useState(null);
+
+  const handleModelChange = ({ provider, model, baseUrl }) => {
+    setSelectedProvider(provider);
+    setSelectedModel(model);
+    setSelectedBaseUrl(baseUrl);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -18,7 +28,13 @@ function InitializeForm({ onInitialized }) {
     try {
       setLoading(true);
       setError(null);
-      const data = await initializeEngine(problemSummary, useHardcodedFallback);
+      const data = await initializeEngine(
+        problemSummary,
+        useHardcodedFallback,
+        selectedProvider,
+        selectedModel,
+        selectedBaseUrl
+      );
       onInitialized(data);
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Failed to initialize');
@@ -41,6 +57,13 @@ function InitializeForm({ onInitialized }) {
             rows="5"
           />
         </div>
+        
+        <ModelSelector
+          onModelChange={handleModelChange}
+          selectedProvider={selectedProvider}
+          selectedModel={selectedModel}
+        />
+        
         <div className="form-group">
           <label>
             <input

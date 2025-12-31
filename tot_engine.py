@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 import json
+from bayesian_pruner import BayesianPruner
 
 # Set up logging
 logging.basicConfig(
@@ -104,7 +105,7 @@ class TreeOfThoughtEngine:
     }
     
     # Thresholds
-    PRUNE_THRESHOLD = 0.3
+    PRUNE_THRESHOLD = 0.15  # Bayesian approach uses 15% threshold
     SUCCESS_THRESHOLD = 0.7
     
     # Rule-based scoring patterns
@@ -143,9 +144,16 @@ class TreeOfThoughtEngine:
         # PRIMARY: Try LLM first (unless fallback is explicitly requested)
         if not use_hardcoded_fallback and self.llm_integration and self.llm_integration.use_llm:
             try:
+                logger.info("Calling LLM to generate hypotheses...")
                 llm_result = self.llm_integration.generate_hypotheses_from_llm(problem_summary)
                 llm_hypotheses = llm_result.get('hypotheses', [])
                 requested_data = llm_result.get('next_requests', [])
+                
+                logger.info(f"LLM returned {len(llm_hypotheses)} hypotheses")
+                if llm_hypotheses:
+                    logger.info(f"Using LLM-generated hypotheses")
+                else:
+                    logger.warning("LLM returned empty hypotheses list, will fall back to hardcoded")
                 
                 if llm_hypotheses:
                     # Convert LLM hypotheses to Hypothesis objects
@@ -482,8 +490,17 @@ class TreeOfThoughtEngine:
         
         try:
             # Evaluate all active branches together
+            logger.info(f"Calling LLM to evaluate {len(new_nodes)} branches with artifact: {artifact_name}")
+            logger.info(f"Using LLM provider: {self.llm_integration.provider_name} ({self.llm_integration.model_name})")
             evaluation_results = self.llm_integration.evaluate_branches_with_llm(
                 new_nodes, artifact_content, self.problem_summary
+            )
+            logger.info(f"LLM evaluation completed. Results for {len(evaluation_results)} branches")
+            
+            # Check if using Bayesian approach (Groq adapter returns likelihood_score)
+            use_bayesian = any(
+                'likelihood_score' in evaluation_results.get(hyp_id, {})
+                for hyp_id in evaluation_results.keys()
             )
             
             # Update each branch's hypothesis with evaluation results
@@ -493,8 +510,6 @@ class TreeOfThoughtEngine:
                     continue
                 
                 result = evaluation_results[hyp_id]
-                scores = result.get('scores', {})
-                evidence_map = result.get('evidence', {})
                 
                 # Store previous confidence for evaluation details (from master hypothesis before update)
                 master_hyp = self.all_hypotheses.get(hyp_id)
@@ -503,30 +518,84 @@ class TreeOfThoughtEngine:
                 # Update the hypothesis in the node
                 if new_node.hypothesis:
                     category = new_node.hypothesis.category
-                    if category in scores:
-                        new_node.hypothesis.llm_score = scores[category]
-                    if category in evidence_map:
-                        new_node.hypothesis.evidence.append(evidence_map[category])
                     
-                    # Update confidence
-                    new_node.hypothesis.update_confidence(self.weights)
-                    
-                    # Update status
-                    if new_node.hypothesis.confidence >= self.SUCCESS_THRESHOLD:
-                        new_node.hypothesis.status = "accepted"
-                    
-                    # Store evaluation details in the node
-                    new_node.evaluation_details = {
-                        'llm_reasoning': result.get('llm_reasoning', ''),
-                        'evidence_found': evidence_map.get(category, ''),
-                        'evidence_summary': result.get('evidence_summary', ''),
-                        'confidence_before': previous_confidence,
-                        'confidence_after': new_node.hypothesis.confidence,
-                        'confidence_change': new_node.hypothesis.confidence - previous_confidence,
-                        'status': result.get('status', 'neutral'),  # supported/contradicted/neutral
-                        'artifact_name': artifact_name,
-                        'evaluated_at': datetime.now().isoformat()
-                    }
+                    if use_bayesian and 'likelihood_score' in result:
+                        # Bayesian Evidence Screening approach
+                        likelihood_score = result.get('likelihood_score', 0)  # -10 to +10
+                        reasoning = result.get('llm_reasoning', '')
+                        evidence_map = result.get('evidence', {})
+                        
+                        # Convert previous confidence from 0-1 to 0-100 for Bayesian calculation
+                        previous_confidence_percent = previous_confidence * 100.0
+                        
+                        # Calculate posterior using Bayesian update
+                        new_confidence_percent = BayesianPruner.calculate_posterior(
+                            previous_confidence_percent, 
+                            likelihood_score
+                        )
+                        
+                        # Convert back to 0-1 scale
+                        new_confidence = new_confidence_percent / 100.0
+                        
+                        # Update hypothesis confidence
+                        new_node.hypothesis.confidence = new_confidence
+                        
+                        # Store likelihood score as llm_score for reference
+                        new_node.hypothesis.llm_score = likelihood_score / 10.0  # Normalize to -1 to 1
+                        
+                        # Add evidence
+                        if category in evidence_map:
+                            new_node.hypothesis.evidence.append(evidence_map[category])
+                        elif reasoning:
+                            new_node.hypothesis.evidence.append(reasoning)
+                        
+                        # Note: Hypotheses are NOT automatically accepted - only confidence is updated
+                        # Acceptance should be done manually after final analysis
+                        
+                        # Store evaluation details
+                        new_node.evaluation_details = {
+                            'llm_reasoning': reasoning,
+                            'evidence_found': evidence_map.get(category, reasoning),
+                            'evidence_summary': result.get('evidence_summary', ''),
+                            'confidence_before': previous_confidence,
+                            'confidence_after': new_node.hypothesis.confidence,
+                            'confidence_change': new_node.hypothesis.confidence - previous_confidence,
+                            'likelihood_score': likelihood_score,  # Store likelihood score
+                            'status': result.get('status', 'neutral'),
+                            'artifact_name': artifact_name,
+                            'evaluated_at': datetime.now().isoformat(),
+                            'update_method': 'bayesian'
+                        }
+                        
+                    else:
+                        # Traditional approach (OpenAI adapter)
+                        scores = result.get('scores', {})
+                        evidence_map = result.get('evidence', {})
+                        
+                        if category in scores:
+                            new_node.hypothesis.llm_score = scores[category]
+                        if category in evidence_map:
+                            new_node.hypothesis.evidence.append(evidence_map[category])
+                        
+                        # Update confidence using traditional method
+                        new_node.hypothesis.update_confidence(self.weights)
+                        
+                        # Note: Hypotheses are NOT automatically accepted - only confidence is updated
+                        # Acceptance should be done manually after final analysis
+                        
+                        # Store evaluation details
+                        new_node.evaluation_details = {
+                            'llm_reasoning': result.get('llm_reasoning', ''),
+                            'evidence_found': evidence_map.get(category, ''),
+                            'evidence_summary': result.get('evidence_summary', ''),
+                            'confidence_before': previous_confidence,
+                            'confidence_after': new_node.hypothesis.confidence,
+                            'confidence_change': new_node.hypothesis.confidence - previous_confidence,
+                            'status': result.get('status', 'neutral'),
+                            'artifact_name': artifact_name,
+                            'evaluated_at': datetime.now().isoformat(),
+                            'update_method': 'traditional'
+                        }
                     
                     # Update the master hypothesis tracking
                     self.all_hypotheses[hyp_id].llm_score = new_node.hypothesis.llm_score
@@ -614,7 +683,7 @@ class TreeOfThoughtEngine:
                     threshold_used = MIN_PROTECTED_CONFIDENCE
                     logger.info(f"Pruning top hypothesis {hypothesis.id} with confidence {current_confidence:.2%} (< 5%)")
                     self.prune_branch(hypothesis.id, pruning_reason, threshold_used, current_confidence, was_top_hypothesis)
-            # Otherwise, prune if below normal threshold
+            # Otherwise, prune if below normal threshold (15% for Bayesian, 30% for traditional)
             else:
                 if current_confidence < self.PRUNE_THRESHOLD:
                     pruning_reason = f"Confidence {current_confidence:.2%} below pruning threshold ({self.PRUNE_THRESHOLD:.0%})"
@@ -1051,34 +1120,77 @@ class TreeOfThoughtEngine:
     def get_all_hypotheses_from_tree(self) -> List[Hypothesis]:
         """
         Traverse the entire tree and collect ALL hypotheses (active, pruned, accepted) from all nodes.
+        Uses master tracking (self.all_hypotheses) as the source of truth for confidence scores.
         
         Returns:
-            List of all hypotheses found in the tree
+            List of all hypotheses found in the tree with updated confidence scores from master tracking
         """
         all_hypotheses = []
         seen_hypothesis_ids = set()
         
-        # Traverse all nodes in the tree
+        # First, collect all hypothesis IDs from nodes (to ensure we don't miss any)
+        hypothesis_ids_from_nodes = set()
+        
+        # Traverse all nodes in the tree to find all hypothesis IDs
         for node in self.nodes:
             # Check if node has a hypothesis
-            if node.hypothesis and node.hypothesis.id not in seen_hypothesis_ids:
-                all_hypotheses.append(node.hypothesis)
-                seen_hypothesis_ids.add(node.hypothesis.id)
+            if node.hypothesis and node.hypothesis.id:
+                hypothesis_ids_from_nodes.add(node.hypothesis.id)
             
             # Check if node has child_hypotheses (from expansion)
             if hasattr(node, 'child_hypotheses') and node.child_hypotheses:
                 for hyp in node.child_hypotheses:
-                    if hyp.id not in seen_hypothesis_ids:
-                        all_hypotheses.append(hyp)
-                        seen_hypothesis_ids.add(hyp.id)
+                    if hyp.id:
+                        hypothesis_ids_from_nodes.add(hyp.id)
         
         # Also check root node's hypotheses (initial hypotheses)
         if self.root_node_id:
             root_node = self._get_node(self.root_node_id)
             for hyp in root_node.hypotheses:
-                if hyp.id not in seen_hypothesis_ids:
-                    all_hypotheses.append(hyp)
-                    seen_hypothesis_ids.add(hyp.id)
+                if hyp.id:
+                    hypothesis_ids_from_nodes.add(hyp.id)
+        
+        # Now, use master tracking (self.all_hypotheses) as the primary source
+        # This ensures we get the latest confidence scores and status
+        for hyp_id in hypothesis_ids_from_nodes:
+            if hyp_id not in seen_hypothesis_ids:
+                # Prefer master tracking (source of truth with updated confidence)
+                master_hyp = self.all_hypotheses.get(hyp_id)
+                if master_hyp:
+                    all_hypotheses.append(master_hyp)
+                else:
+                    # Fallback: if not in master tracking, find it from nodes
+                    # This handles edge cases where a hypothesis exists but isn't tracked yet
+                    for node in self.nodes:
+                        if node.hypothesis and node.hypothesis.id == hyp_id:
+                            all_hypotheses.append(node.hypothesis)
+                            break
+                        if hasattr(node, 'child_hypotheses') and node.child_hypotheses:
+                            for hyp in node.child_hypotheses:
+                                if hyp.id == hyp_id:
+                                    all_hypotheses.append(hyp)
+                                    break
+                    else:
+                        # Check root node as last resort
+                        if self.root_node_id:
+                            root_node = self._get_node(self.root_node_id)
+                            for hyp in root_node.hypotheses:
+                                if hyp.id == hyp_id:
+                                    all_hypotheses.append(hyp)
+                                    break
+                
+                seen_hypothesis_ids.add(hyp_id)
+        
+        # Final sync: ensure any hypotheses from nodes are synced with master tracking
+        # This handles cases where we had to use node hypotheses as fallback
+        for hyp in all_hypotheses:
+            master_hyp = self.all_hypotheses.get(hyp.id)
+            if master_hyp:
+                # Sync confidence, status, and evidence from master (source of truth)
+                hyp.confidence = master_hyp.confidence
+                hyp.status = master_hyp.status
+                hyp.evidence = master_hyp.evidence.copy() if master_hyp.evidence else []
+                hyp.llm_score = master_hyp.llm_score
         
         return all_hypotheses
     

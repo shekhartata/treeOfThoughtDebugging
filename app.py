@@ -12,6 +12,7 @@ import json
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
+import httpx
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,9 +22,8 @@ CORS(app)
 
 # Initialize global instances
 engine: Optional[TreeOfThoughtEngine] = None
-# LLM is now REQUIRED by default (require_llm=True)
-# Set require_llm=False if you want to allow fallback mode
-llm_integration = LLMIntegration(require_llm=True)
+# LLM integration will be created per-session with selected provider/model
+llm_integration: Optional[LLMIntegration] = None
 
 @app.route('/')
 def index():
@@ -34,10 +34,73 @@ def index():
     else:
         return render_template('index.html')
 
+@app.route('/api/detect-local-llm', methods=['GET'])
+def detect_local_llm():
+    """
+    Auto-detect if a local Ollama instance is running.
+    Returns available models if detected, or null if not available.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    base_url = request.args.get('base_url', 'http://localhost:11434')
+    timeout = float(request.args.get('timeout', 2.0))
+    
+    try:
+        # Try to ping Ollama API
+        ollama_url = f"{base_url}/api/tags"
+        logger.info(f"Attempting to detect Ollama at {ollama_url} with timeout {timeout}s")
+        
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(ollama_url)
+            logger.info(f"Ollama response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Ollama response data: {data}")
+                models = [model.get('name', '') for model in data.get('models', [])]
+                models = [m for m in models if m]  # Filter out empty names
+                logger.info(f"Parsed models: {models}")
+                
+                return jsonify({
+                    'available': True,
+                    'models': models,
+                    'base_url': base_url
+                })
+            else:
+                error_msg = f'Ollama returned status {response.status_code}'
+                logger.warning(error_msg)
+                return jsonify({
+                    'available': False,
+                    'error': error_msg
+                })
+                
+    except httpx.TimeoutException as e:
+        error_msg = f'Connection timeout after {timeout}s - Ollama not running or unreachable at {base_url}'
+        logger.warning(error_msg)
+        return jsonify({
+            'available': False,
+            'error': error_msg
+        })
+    except httpx.ConnectError as e:
+        error_msg = f'Connection refused - Ollama not running at {base_url}'
+        logger.warning(error_msg)
+        return jsonify({
+            'available': False,
+            'error': error_msg
+        })
+    except Exception as e:
+        error_msg = f'Unexpected error: {str(e)}'
+        logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'available': False,
+            'error': error_msg
+        })
+
 @app.route('/api/initialize', methods=['POST'])
 def initialize():
     """Initialize the ToT engine with a problem statement."""
-    global engine
+    global engine, llm_integration
     
     data = request.json
     problem_summary = data.get('problem_summary', '')
@@ -45,11 +108,27 @@ def initialize():
     if not problem_summary:
         return jsonify({'error': 'Problem summary is required'}), 400
     
-    # Initialize engine with LLM integration
-    # LLM will generate hypotheses by default
-    # Pass use_hardcoded_fallback=True in request to use fallback mode
+    # Get provider and model from request (optional)
+    provider = data.get('provider', None)  # 'openai', 'groq', 'ollama'
+    model = data.get('model', None)  # Model name
+    base_url = data.get('base_url', None)  # For Ollama, custom base URL
     use_fallback = data.get('use_hardcoded_fallback', False)
     
+    # Create LLM integration with selected provider/model
+    try:
+        llm_kwargs = {}
+        if provider:
+            llm_kwargs['provider'] = provider
+        if model:
+            llm_kwargs['model'] = model
+        if base_url and provider == 'ollama':
+            llm_kwargs['base_url'] = base_url
+        
+        llm_integration = LLMIntegration(require_llm=not use_fallback, **llm_kwargs)
+    except Exception as e:
+        return jsonify({'error': f'Failed to initialize LLM: {str(e)}'}), 400
+    
+    # Initialize engine with LLM integration
     engine = TreeOfThoughtEngine(llm_integration=llm_integration)
     initial_node = engine.initialize(problem_summary, use_hardcoded_fallback=use_fallback)
     
@@ -710,10 +789,11 @@ def unprune_branch():
 @app.route('/api/reset', methods=['POST'])
 def reset_session():
     """Reset the debugging session - clears all tree content."""
-    global engine
+    global engine, llm_integration
     
-    # Clear the engine completely
+    # Clear the engine and LLM integration completely
     engine = None
+    llm_integration = None
     
     return jsonify({
         'success': True,
