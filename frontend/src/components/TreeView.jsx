@@ -9,7 +9,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import CustomNode from './CustomNode';
 import EvaluationDetailsModal from './EvaluationDetailsModal';
-import api from '../services/api';
+import api, { getHistory, backtrack, generateNode } from '../services/api';
 import '../styles/TreeView.css';
 
 const nodeTypes = {
@@ -24,21 +24,22 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Load history if not provided
+  // Load history if not provided (requires sessionId so request includes session_id)
   useEffect(() => {
-    if (!initialNodes || initialNodes.length === 0) {
-      loadHistory();
-    } else {
+    if (initialNodes && initialNodes.length > 0) {
       setNodes(initialNodes);
+    } else if (sessionId) {
+      loadHistory();
     }
-  }, [initialNodes]);
+  }, [initialNodes, sessionId]);
 
   const loadHistory = async () => {
+    if (!sessionId) return;
     try {
       setLoading(true);
-      const response = await api.get('/history');
-      if (response.data && response.data.nodes) {
-        setNodes(response.data.nodes);
+      const data = await getHistory(sessionId);
+      if (data && data.nodes) {
+        setNodes(data.nodes);
       }
     } catch (error) {
       console.error('Error loading history:', error);
@@ -136,7 +137,6 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
 
   const handleBacktrack = async (nodeId) => {
     try {
-      const { backtrack } = await import('../services/api');
       const data = await backtrack(nodeId, true, sessionId);
       if (onBacktrack) onBacktrack(data);
       if (onRefresh) onRefresh();
@@ -147,7 +147,6 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
 
   const handleGenerate = async (nodeId) => {
     try {
-      const { generateNode } = await import('../services/api');
       const data = await generateNode(nodeId, sessionId);
       if (onExpand) onExpand(data);
       if (onRefresh) onRefresh();
@@ -206,6 +205,7 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
       </div>
       <EvaluationDetailsModal
         nodeId={selectedNodeId}
+        sessionId={sessionId}
         isOpen={isModalOpen}
         onClose={() => {
           setIsModalOpen(false);

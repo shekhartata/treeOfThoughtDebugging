@@ -6,14 +6,20 @@ import ArtifactUpload from './ArtifactUpload';
 import TreeView from './TreeView';
 import FinalAnalysis from './FinalAnalysis';
 import SessionManager from './SessionManager';
-import { resetSession } from '../services/api';
+import AddHypothesisModal from './AddHypothesisModal';
+import { resetSession, addBranch } from '../services/api';
 import '../styles/CurrentState.css';
 
 function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
   const [showHistory, setShowHistory] = useState(false);
+  const [showAddHypothesisModal, setShowAddHypothesisModal] = useState(false);
 
   if (!currentState) {
-    return <div>Loading...</div>;
+    return (
+      <div className="current-state-loading">
+        <p>Loading board…</p>
+      </div>
+    );
   }
 
   return (
@@ -36,6 +42,17 @@ function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
         />
         
         <NextRequests requests={currentState.next_requests || currentState.requested_data || []} />
+        
+        <div className="section add-hypothesis-row">
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => setShowAddHypothesisModal(true)}
+            style={{ marginRight: '10px' }}
+          >
+            ➕ Add hypothesis (create branch)
+          </button>
+        </div>
         
         <ArtifactUpload 
           branches={currentState.branches || []}
@@ -73,6 +90,16 @@ function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
           />
         )}
       </div>
+
+      <AddHypothesisModal
+        isOpen={showAddHypothesisModal}
+        onClose={() => setShowAddHypothesisModal(false)}
+        sessionId={currentState.session_id}
+        onSubmit={async (description, category) => {
+          await addBranch(currentState.session_id, description, category);
+          onRefresh();
+        }}
+      />
 
       <FinalAnalysis 
         isComplete={currentState.is_complete}

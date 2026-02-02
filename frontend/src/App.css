@@ -3,6 +3,63 @@
     min-height: 100vh;
 }
 
+.app-container.app-loading {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    width: 100%;
+    background: #f0f2f5;
+    z-index: 9999;
+}
+
+.app-loading-card {
+    padding: 2rem 3rem !important;
+    min-width: 320px;
+    background: #fff !important;
+    border-radius: 12px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+    opacity: 1;
+}
+
+.app-loading-text {
+    margin: 0;
+    color: #1a1a1a !important;
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+.app-loading-hint {
+    margin: 0.75rem 0 0;
+    color: #555 !important;
+    font-size: 0.9rem;
+}
+
+.app-loading-skip {
+    margin-top: 1.25rem;
+    padding: 0.75rem 1.25rem;
+    background: #667eea;
+    color: white !important;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: block;
+    width: 100%;
+}
+
+.app-loading-skip:hover {
+    background: #5a6fd6;
+}
+
+.app-loading-skip:focus {
+    outline: 2px solid #667eea;
+    outline-offset: 2px;
+}
+
 .container {
     max-width: 1400px;
     margin: 0 auto;
@@ -16,7 +73,76 @@
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     padding: 30px;
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.header-title {
+    text-align: left;
+}
+
+.header-user {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.9rem;
+    opacity: 0.95;
+    flex-shrink: 0;
+}
+
+.header-logout {
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.header-logout:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.header-logout-primary {
+    flex-shrink: 0;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+.header-logout-primary:hover {
+    background: rgba(255, 255, 255, 0.45);
+}
+
+.header-share {
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.25);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.header-share:hover {
+    background: rgba(255, 255, 255, 0.35);
+}
+
+.header-user-email {
+    opacity: 0.95;
+}
+
+.header-user-role {
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.5);
 }
 
 .header h1 {

@@ -1,2 +1,11 @@
 /* CurrentState specific styles - most styles are in App.css */
 
+.current-state-loading {
+  padding: 2rem;
+  color: #1a1a1a;
+  font-size: 1.1rem;
+}
+
+.current-state-loading p {
+  margin: 0;
+}

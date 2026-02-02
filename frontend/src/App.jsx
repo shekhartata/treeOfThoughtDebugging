@@ -1,18 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
+import { useAuth } from './contexts/AuthContext';
+import Login from './components/Login';
 import InitializeForm from './components/InitializeForm';
 import CurrentState from './components/CurrentState';
 import TreeView from './components/TreeView';
 import SessionRecoveryDialog from './components/SessionRecoveryDialog';
-import { getCurrentNode, checkSession, getHistory } from './services/api';
+import ShareModal from './components/ShareModal';
+import { getCurrentNode, checkSession, getHistory, joinBoard, setBoardToken, clearBoardToken, clearCurrentSessionStorage } from './services/api';
 
 function App() {
+  const { user, loading: authLoading, logout } = useAuth();
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentState, setCurrentState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [joiningByToken, setJoiningByToken] = useState(
+    () => typeof window !== 'undefined' && !!new URLSearchParams(window.location.search).get('token')
+  );
+  const [shareUrl, setShareUrl] = useState(null);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [skipLoading, setSkipLoading] = useState(false);
+
+  // Reset skip-loading when user changes so new user always sees loading/next screen correctly
+  useEffect(() => {
+    setSkipLoading(false);
+  }, [user]);
 
   const loadCurrentState = async (sid = null) => {
     try {
@@ -90,9 +105,83 @@ function App() {
     }
   };
 
-  // Auto-detect existing session on mount
+  // When user logs in and URL has ?token=, run join (share link requires login)
+  useEffect(() => {
+    if (!user) {
+      setJoiningByToken(false); // clear loading when user signs out so we don't stay stuck
+      return;
+    }
+    const urlParams = new URLSearchParams(window.location.search);
+    const shareToken = urlParams.get('token');
+    if (!shareToken) return;
+    // When opening a share link, always join; clear any existing session so we don't show wrong board
+    if (sessionId) {
+      clearBoardToken(sessionId);
+      clearCurrentSessionStorage();
+      setSessionId(null);
+      setIsInitialized(false);
+      setCurrentState(null);
+    }
+    setSkipLoading(false);
+    let cancelled = false;
+    setJoiningByToken(true);
+    setError(null);
+    const timeoutMs = 12000;
+    const timeoutId = setTimeout(() => {
+      if (!cancelled) {
+        setJoiningByToken(false);
+        setError('Opening shared board timed out. Please try again or check the link.');
+      }
+    }, timeoutMs);
+    joinBoard(shareToken)
+      .then((joinData) => {
+        if (cancelled) return;
+        const sid = joinData?.session_id != null ? String(joinData.session_id) : null;
+        const tokenToStore = joinData?.share_token || shareToken;
+        if (sid) {
+          localStorage.setItem('current_session_id', sid);
+          setBoardToken(sid, tokenToStore);
+          setSessionId(sid);
+          setIsInitialized(true);
+          setError(null);
+          window.history.replaceState({}, '', window.location.pathname || '/');
+          loadCurrentState(sid).catch((err) => {
+            console.error('Failed to load board after join:', err);
+            setError(err.response?.data?.error || err.message || 'Failed to load board.');
+          });
+        } else {
+          setError('Invalid share link response. Please ask the owner for a new link.');
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          console.error('Failed to join board:', e);
+          const msg = e.response?.data?.error || e.message || 'Failed to open shared board';
+          setError(msg + (e.response?.status === 403 ? ' Make sure you’re signed in with the account the owner shared the link with.' : ''));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setJoiningByToken(false);
+        clearTimeout(timeoutId);
+      });
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [user]);
+
+  // Auto-detect existing session on mount (only when no token in URL; token flow needs login first)
   useEffect(() => {
     const detectSession = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const shareToken = urlParams.get('token');
+      if (shareToken) {
+        // Share link: require login; join will run in the effect above when user is set
+        setJoiningByToken(false);
+        return;
+      }
+      setJoiningByToken(false);
+
       // Check if we should skip session detection (after reset)
       const skipDetection = localStorage.getItem('skip_session_detection');
       if (skipDetection === 'true') {
@@ -149,6 +238,27 @@ function App() {
     }
   }, [isInitialized, sessionId]);
 
+  // After sign-in, restore a board only if current user has access (owner or shared_with)
+  useEffect(() => {
+    if (!user || sessionId || joiningByToken) return;
+    const stored = localStorage.getItem('current_session_id');
+    if (!stored) return;
+    checkSession({ params: { session_id: stored } })
+      .then((result) => {
+        if (result.has_session) {
+          setSessionId(stored);
+          setIsInitialized(true);
+        } else {
+          clearBoardToken(stored);
+          clearCurrentSessionStorage();
+        }
+      })
+      .catch(() => {
+        clearBoardToken(stored);
+        clearCurrentSessionStorage();
+      });
+  }, [user]);
+
   const handleInitialized = async (data) => {
     // Extract session_id from response first
     const sid = data.session_id || data.node?.session_id;
@@ -183,7 +293,8 @@ function App() {
         },
         branches: [],
         is_focused: false,
-        current_branch_ids: []
+        current_branch_ids: [],
+        is_owner: data.is_owner !== false
       };
       
       setCurrentState(initialState);
@@ -239,6 +350,71 @@ function App() {
     setCurrentState(data);
   };
 
+  const handleLogout = () => {
+    const sid = currentState?.session_id || sessionId;
+    if (sid) clearBoardToken(sid);
+    clearCurrentSessionStorage();
+    logout();
+    setSessionId(null);
+    setCurrentState(null);
+    setIsInitialized(false);
+  };
+
+  const handleReturnToLogin = () => {
+    const sid = currentState?.session_id || sessionId;
+    if (sid) clearBoardToken(sid);
+    clearCurrentSessionStorage();
+    setSessionId(null);
+    setCurrentState(null);
+    setIsInitialized(false);
+    logout();
+  };
+
+  const handleShare = () => {
+    const sid = currentState?.session_id || sessionId;
+    if (!sid) return;
+    setShowShareModal(true);
+  };
+
+  const handleShareCopied = (url) => {
+    setShareUrl(url);
+    setTimeout(() => setShareUrl(null), 3000);
+  };
+
+  // Auth gate: show login until we know auth state; allow guest access when joined via token (sessionId set)
+  const hasTokenInUrl = typeof window !== 'undefined' && !!new URLSearchParams(window.location.search).get('token');
+  const stuckOnLoading = (authLoading || joiningByToken) && !skipLoading;
+  if (stuckOnLoading) {
+    return (
+      <div className="app-container app-loading">
+        <div className="container app-loading-card">
+          <p className="app-loading-text">
+            {hasTokenInUrl ? 'Loading shared board…' : 'Loading…'}
+          </p>
+          <p className="app-loading-hint">If this takes too long, refresh the page or check your connection.</p>
+          <button
+            type="button"
+            className="app-loading-skip"
+            onClick={() => setSkipLoading(true)}
+          >
+            Stuck? Click here to continue
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const hasShareToken = urlParams && urlParams.get('token');
+
+  if (!user) {
+    return (
+      <Login
+        message={hasShareToken ? 'Sign in to open this shared board. Only people the owner shared with can access it.' : undefined}
+      />
+    );
+  }
+
   if (!isInitialized) {
     return (
       <div className="app-container">
@@ -251,10 +427,21 @@ function App() {
         )}
         <div className="container">
           <div className="header">
-            <h1>🌳 MongoDB Tree-of-Thought Debugging Tool</h1>
-            <p>Interactive reasoning engine for diagnosing MongoDB issues</p>
+            <div className="header-title">
+              <h1>🌳 MongoDB Tree-of-Thought Debugging Tool</h1>
+              <p>Interactive reasoning engine for diagnosing MongoDB issues</p>
+            </div>
+            <div className="header-user">
+              <span>{user?.email}</span>
+              <button type="button" className="header-logout" onClick={handleLogout}>Sign out</button>
+            </div>
           </div>
           <div className="content">
+            {error && (
+              <div className="error-message">
+                {error}
+              </div>
+            )}
             <InitializeForm onInitialized={handleInitialized} />
           </div>
         </div>
@@ -266,8 +453,40 @@ function App() {
     <div className="app-container">
       <div className="container">
         <div className="header">
-          <h1>🌳 MongoDB Tree-of-Thought Debugging Tool</h1>
-          <p>Interactive reasoning engine for diagnosing MongoDB issues</p>
+          <div className="header-title">
+            <h1>🌳 MongoDB Tree-of-Thought Debugging Tool</h1>
+            <p>Interactive reasoning engine for diagnosing MongoDB issues</p>
+          </div>
+          <div className="header-user">
+            {user ? (
+              <button type="button" className="header-logout header-logout-primary" onClick={handleLogout}>
+                Sign out
+              </button>
+            ) : (
+              <button type="button" className="header-logout header-logout-primary" onClick={handleReturnToLogin}>
+                Sign in to switch account
+              </button>
+            )}
+            {user && sessionId && currentState && (currentState.is_owner !== false) && (
+              <>
+                <button type="button" className="header-share" onClick={handleShare}>
+                  {shareUrl ? '✓ Link copied!' : 'Share'}
+                </button>
+                <ShareModal
+                  isOpen={showShareModal}
+                  onClose={() => setShowShareModal(false)}
+                  sessionId={currentState?.session_id || sessionId}
+                  onCopied={handleShareCopied}
+                />
+              </>
+            )}
+            <span className="header-user-email">{user?.email || (sessionId && !user ? 'Collaborator' : '')}</span>
+            {user && sessionId && currentState && (
+              <span className="header-user-role" title={currentState.is_owner !== false ? 'You own this board' : 'You were shared this board'}>
+                {currentState.is_owner !== false ? 'Owner' : 'Collaborator'}
+              </span>
+            )}
+          </div>
         </div>
         <div className="content">
           {error && (

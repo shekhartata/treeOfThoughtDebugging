@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getNodeEvaluationDetails } from '../services/api';
 import '../styles/EvaluationDetailsModal.css';
 
-function EvaluationDetailsModal({ nodeId, isOpen, onClose }) {
+function EvaluationDetailsModal({ nodeId, sessionId, isOpen, onClose }) {
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -11,13 +11,17 @@ function EvaluationDetailsModal({ nodeId, isOpen, onClose }) {
     if (isOpen && nodeId) {
       loadDetails();
     }
-  }, [isOpen, nodeId]);
+  }, [isOpen, nodeId, sessionId]);
 
   const loadDetails = async () => {
+    if (!sessionId) {
+      setError('Session ID is required');
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
-      const data = await getNodeEvaluationDetails(nodeId);
+      const data = await getNodeEvaluationDetails(nodeId, sessionId);
       setDetails(data);
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Failed to load evaluation details');
