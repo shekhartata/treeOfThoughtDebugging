@@ -2,7 +2,7 @@ import React from 'react';
 import { focusBranch, pruneBranch, unpruneBranch } from '../services/api';
 import '../styles/HypothesisCard.css';
 
-function HypothesisCard({ hypothesis, hypothesisNumber, onStateUpdate, onRefresh }) {
+function HypothesisCard({ hypothesis, hypothesisNumber, onStateUpdate, onRefresh, sessionId }) {
   const confidence = hypothesis.confidence || 0;
   const confidenceClass = confidence >= 0.7 ? 'confidence-high' : 
                           confidence >= 0.4 ? 'confidence-medium' : 'confidence-low';
@@ -10,7 +10,7 @@ function HypothesisCard({ hypothesis, hypothesisNumber, onStateUpdate, onRefresh
 
   const handleFocus = async () => {
     try {
-      const data = await focusBranch(hypothesis.id);
+      const data = await focusBranch(hypothesis.id, sessionId);
       if (onStateUpdate) onStateUpdate(data);
       if (onRefresh) onRefresh();
     } catch (error) {
@@ -21,7 +21,7 @@ function HypothesisCard({ hypothesis, hypothesisNumber, onStateUpdate, onRefresh
   const handlePrune = async () => {
     if (!confirm(`Are you sure you want to prune this hypothesis?`)) return;
     try {
-      const data = await pruneBranch(hypothesis.id);
+      const data = await pruneBranch(hypothesis.id, sessionId);
       if (onStateUpdate) onStateUpdate(data);
       if (onRefresh) onRefresh();
     } catch (error) {
@@ -31,7 +31,7 @@ function HypothesisCard({ hypothesis, hypothesisNumber, onStateUpdate, onRefresh
 
   const handleUnprune = async () => {
     try {
-      const data = await unpruneBranch(hypothesis.id);
+      const data = await unpruneBranch(hypothesis.id, sessionId);
       if (onStateUpdate) onStateUpdate(data);
       if (onRefresh) onRefresh();
     } catch (error) {

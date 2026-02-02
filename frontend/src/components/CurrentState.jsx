@@ -5,6 +5,7 @@ import NextRequests from './NextRequests';
 import ArtifactUpload from './ArtifactUpload';
 import TreeView from './TreeView';
 import FinalAnalysis from './FinalAnalysis';
+import SessionManager from './SessionManager';
 import { resetSession } from '../services/api';
 import '../styles/CurrentState.css';
 
@@ -18,6 +19,10 @@ function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
   return (
     <>
       <div className="section">
+        <SessionManager 
+          sessionId={currentState.session_id} 
+          onSaveSuccess={onRefresh}
+        />
         <h2>Current Reasoning Step: {currentState.step_number || '-'}</h2>
         
         <TreeSummary summary={currentState.tree_summary} />
@@ -27,6 +32,7 @@ function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
           hypotheses={currentState.all_hypotheses || []}
           onStateUpdate={onStateUpdate}
           onRefresh={onRefresh}
+          sessionId={currentState.session_id}
         />
         
         <NextRequests requests={currentState.next_requests || currentState.requested_data || []} />
@@ -35,6 +41,7 @@ function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
           branches={currentState.branches || []}
           isFocused={currentState.is_focused || false}
           currentBranchIds={currentState.current_branch_ids || []}
+          sessionId={currentState.session_id}
           onStateUpdate={onStateUpdate}
           onRefresh={onRefresh}
         />
@@ -59,6 +66,7 @@ function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
             nodes={currentState.nodes || currentState.history_nodes || []}
             currentNodeId={currentState.current_node_id}
             rootNodeId={currentState.root_node_id}
+            sessionId={currentState.session_id}
             onBacktrack={onStateUpdate}
             onExpand={onStateUpdate}
             onRefresh={onRefresh}
@@ -68,6 +76,7 @@ function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
 
       <FinalAnalysis 
         isComplete={currentState.is_complete}
+        sessionId={currentState.session_id}
         onStateUpdate={onStateUpdate}
       />
       
@@ -76,13 +85,16 @@ function CurrentState({ currentState, onStateUpdate, onRefresh, loading }) {
           className="button button-danger" 
           onClick={async () => {
             if (window.confirm('Are you sure you want to end this debugging session? This will clear all tree content and reset the session.')) {
-              try {
-                await resetSession();
+                try {
+                await resetSession(currentState.session_id);
+                // Clear localStorage and add a flag to skip session detection on reload
+                localStorage.removeItem('current_session_id');
+                localStorage.setItem('skip_session_detection', 'true');
                 alert('Session reset successfully! The page will reload.');
                 window.location.reload();
-              } catch (error) {
+            } catch (error) {
                 alert('Error resetting session: ' + (error.response?.data?.error || error.message));
-              }
+            }
             }
           }}
           style={{ 

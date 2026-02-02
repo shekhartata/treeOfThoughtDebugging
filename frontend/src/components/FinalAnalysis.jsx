@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import api from '../services/api';
 import '../styles/FinalAnalysis.css';
 
-function FinalAnalysis({ isComplete, onStateUpdate }) {
+function FinalAnalysis({ isComplete, onStateUpdate, sessionId }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -11,7 +11,8 @@ function FinalAnalysis({ isComplete, onStateUpdate }) {
     try {
       setLoading(true);
       setError(null);
-      const response = await api.get('/final-analysis');
+      const config = sessionId ? { params: { session_id: sessionId } } : {};
+      const response = await api.get('/final-analysis', config);
       const data = response.data;
       if (data.analysis) {
         setAnalysis(data.analysis);

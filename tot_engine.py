@@ -49,6 +49,37 @@ class Hypothesis:
         )
         # Clamp between 0 and 1
         self.confidence = max(0.0, min(1.0, self.confidence))
+    
+    def to_dict(self) -> Dict:
+        """Convert Hypothesis to dictionary for MongoDB storage."""
+        return {
+            "id": self.id,
+            "description": self.description,
+            "category": self.category,
+            "prior_score": self.prior_score,
+            "evidence": self.evidence.copy() if self.evidence else [],
+            "rule_score": self.rule_score,
+            "llm_score": self.llm_score,
+            "user_feedback": self.user_feedback,
+            "confidence": self.confidence,
+            "status": self.status
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Hypothesis':
+        """Create Hypothesis from dictionary."""
+        return cls(
+            id=data["id"],
+            description=data["description"],
+            category=data["category"],
+            prior_score=data["prior_score"],
+            evidence=data.get("evidence", []),
+            rule_score=data.get("rule_score", 0.0),
+            llm_score=data.get("llm_score", 0.0),
+            user_feedback=data.get("user_feedback", 0.0),
+            confidence=data.get("confidence", 0.0),
+            status=data.get("status", "active")
+        )
 
 
 @dataclass
@@ -80,6 +111,81 @@ class ReasoningNode:
     
     # Child hypotheses created via node expansion (not in root)
     child_hypotheses: List[Hypothesis] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict:
+        """Convert ReasoningNode to dictionary for MongoDB storage."""
+        result = {
+            "node_id": self.id,
+            "step_number": self.step_number,
+            "hypothesis_id": self.hypothesis_id,
+            "parent_node_id": self.parent_id,
+            "children_node_ids": self.children_ids.copy() if self.children_ids else [],
+            "branch_status": self.branch_status,
+            "requested_data": self.requested_data.copy() if self.requested_data else [],
+            "evaluation_summary": self.evaluation_summary,
+            "timestamp": self.timestamp,
+            "evaluation_details": self.evaluation_details,
+            "pruning_details": self.pruning_details
+        }
+        
+        # Add hypothesis if present
+        if self.hypothesis:
+            result["hypothesis"] = self.hypothesis.to_dict()
+        
+        # Add initial hypotheses (for root node)
+        if self.hypotheses:
+            result["initial_hypotheses"] = [h.to_dict() for h in self.hypotheses]
+        
+        # Add child hypotheses (for expanded nodes)
+        if self.child_hypotheses:
+            result["child_hypotheses"] = [h.to_dict() for h in self.child_hypotheses]
+        
+        return result
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'ReasoningNode':
+        """Create ReasoningNode from dictionary."""
+        # Reconstruct hypothesis if present
+        hypothesis = None
+        if "hypothesis" in data and data["hypothesis"]:
+            hypothesis = Hypothesis.from_dict(data["hypothesis"])
+        
+        # Reconstruct initial hypotheses if present
+        hypotheses = []
+        if "initial_hypotheses" in data and data["initial_hypotheses"]:
+            hypotheses = [Hypothesis.from_dict(h) for h in data["initial_hypotheses"]]
+        
+        # Reconstruct child hypotheses if present
+        child_hypotheses = []
+        if "child_hypotheses" in data and data["child_hypotheses"]:
+            child_hypotheses = [Hypothesis.from_dict(h) for h in data["child_hypotheses"]]
+        
+        # Handle timestamp (can be datetime or ISO string)
+        timestamp = data.get("timestamp")
+        if isinstance(timestamp, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            except:
+                timestamp = datetime.now()
+        elif timestamp is None:
+            timestamp = datetime.now()
+        
+        return cls(
+            id=data["node_id"],
+            step_number=data["step_number"],
+            hypothesis_id=data.get("hypothesis_id"),
+            hypothesis=hypothesis,
+            parent_id=data.get("parent_node_id"),
+            children_ids=data.get("children_node_ids", []),
+            branch_status=data.get("branch_status", "active"),
+            requested_data=data.get("requested_data", []),
+            evaluation_summary=data.get("evaluation_summary", ""),
+            timestamp=timestamp,
+            evaluation_details=data.get("evaluation_details"),
+            pruning_details=data.get("pruning_details"),
+            hypotheses=hypotheses,
+            child_hypotheses=child_hypotheses
+        )
 
 
 class TreeOfThoughtEngine:
@@ -1063,14 +1169,30 @@ class TreeOfThoughtEngine:
         """Get the current active node (latest leaf node after artifact processing, or root if not set)."""
         if not self.root_node_id:
             return None
+        
+        # If no nodes exist, return None (session might be corrupted)
+        if not self.nodes:
+            logger.warning(f"No nodes found in engine. Root node ID: {self.root_node_id}")
+            return None
+        
         # If current_node_id is set, return that node; otherwise return root
         if self.current_node_id:
             try:
                 return self._get_node(self.current_node_id)
             except ValueError:
                 # If current_node_id is invalid, fall back to root
-                return self._get_node(self.root_node_id)
-        return self._get_node(self.root_node_id)
+                try:
+                    return self._get_node(self.root_node_id)
+                except ValueError:
+                    # If root node also not found, return first node or None
+                    logger.warning(f"Neither current_node_id ({self.current_node_id}) nor root_node_id ({self.root_node_id}) found in nodes")
+                    return self.nodes[0] if self.nodes else None
+        try:
+            return self._get_node(self.root_node_id)
+        except ValueError:
+            # If root node not found, return first node or None
+            logger.warning(f"Root node {self.root_node_id} not found in nodes")
+            return self.nodes[0] if self.nodes else None
     
     def get_all_active_hypotheses_from_tree(self) -> List[Hypothesis]:
         """
@@ -1083,6 +1205,10 @@ class TreeOfThoughtEngine:
         """
         active_hypotheses = []
         seen_hypothesis_ids = set()
+        
+        # If no nodes, return empty list
+        if not self.nodes:
+            return []
         
         # Traverse all nodes in the tree
         for node in self.nodes:
@@ -1127,6 +1253,10 @@ class TreeOfThoughtEngine:
         """
         all_hypotheses = []
         seen_hypothesis_ids = set()
+        
+        # If no nodes, return empty list
+        if not self.nodes:
+            return []
         
         # First, collect all hypothesis IDs from nodes (to ensure we don't miss any)
         hypothesis_ids_from_nodes = set()
@@ -1196,11 +1326,18 @@ class TreeOfThoughtEngine:
     
     def get_tree_summary(self) -> Dict:
         """Get a summary of the reasoning tree."""
-        # Use tree traversal to get all hypotheses (not just root)
-        all_hypotheses = self.get_all_hypotheses_from_tree()
-        active_hypotheses = [h for h in all_hypotheses if h.status == "active"]
-        pruned_hypotheses = [h for h in all_hypotheses if h.status == "pruned"]
-        accepted_hypotheses = [h for h in all_hypotheses if h.status == "accepted"]
+        try:
+            # Use tree traversal to get all hypotheses (not just root)
+            all_hypotheses = self.get_all_hypotheses_from_tree()
+            active_hypotheses = [h for h in all_hypotheses if h.status == "active"]
+            pruned_hypotheses = [h for h in all_hypotheses if h.status == "pruned"]
+            accepted_hypotheses = [h for h in all_hypotheses if h.status == "accepted"]
+        except Exception as e:
+            logger.warning(f"Error getting hypotheses from tree: {e}. Using fallback summary.")
+            # Fallback if tree traversal fails
+            active_hypotheses = []
+            pruned_hypotheses = []
+            accepted_hypotheses = []
         
         return {
             'total_nodes': len(self.nodes),
@@ -1292,4 +1429,84 @@ class TreeOfThoughtEngine:
     
     # _get_mitigation_strategies() and _get_next_steps() methods removed
     # All mitigation and next steps are now generated by LLM
+    
+    def to_dict_for_db(self, session_id: str, llm_provider: str = None, llm_model: str = None) -> Tuple[Dict, List[Dict]]:
+        """
+        Convert engine state to dictionaries for MongoDB storage.
+        
+        Returns:
+            Tuple of (session_data, nodes_data)
+        """
+        # Prepare session document
+        session_data = {
+            "created_at": datetime.utcnow(),  # Will be set on first save
+            "problem_summary": self.problem_summary,
+            "session_status": "active",
+            "root_node_id": self.root_node_id,
+            "current_node_id": self.current_node_id,
+            "current_branch_ids": self.current_branch_ids.copy() if self.current_branch_ids else [],
+            "step_counter": self.step_counter,
+            "weights": self.weights.copy(),
+            "metadata": {
+                "llm_provider": llm_provider or (self.llm_integration.provider_name if self.llm_integration else "unknown"),
+                "llm_model": llm_model or (self.llm_integration.model_name if self.llm_integration else "unknown"),
+                "total_nodes": len(self.nodes),
+                "total_hypotheses": len(self.all_hypotheses)
+            }
+        }
+        
+        # Prepare nodes documents
+        nodes_data = [node.to_dict() for node in self.nodes]
+        
+        return session_data, nodes_data
+    
+    @classmethod
+    def from_normalized(cls, session_data: Dict, nodes_data: List[Dict], llm_integration=None) -> 'TreeOfThoughtEngine':
+        """
+        Reconstruct engine from normalized MongoDB data.
+        
+        Args:
+            session_data: Session document from MongoDB
+            nodes_data: List of node documents from MongoDB
+            llm_integration: LLM integration instance (optional)
+        
+        Returns:
+            Reconstructed TreeOfThoughtEngine instance
+        """
+        # Create engine instance
+        engine = cls(weights=session_data.get("weights"), llm_integration=llm_integration)
+        
+        # Restore engine state
+        engine.problem_summary = session_data.get("problem_summary", "")
+        engine.root_node_id = session_data.get("root_node_id")
+        engine.current_node_id = session_data.get("current_node_id")
+        engine.current_branch_ids = session_data.get("current_branch_ids", [])
+        engine.step_counter = session_data.get("step_counter", 0)
+        
+        # Reconstruct nodes
+        if not nodes_data:
+            logger.warning(f"No nodes found in MongoDB for session. Session data: {session_data.get('_id', 'unknown')}")
+            engine.nodes = []
+        else:
+            engine.nodes = [ReasoningNode.from_dict(node) for node in nodes_data]
+            logger.info(f"Reconstructed {len(engine.nodes)} nodes from MongoDB")
+        
+        # Reconstruct all_hypotheses master tracking
+        engine.all_hypotheses = {}
+        for node in engine.nodes:
+            # Add hypothesis from node
+            if node.hypothesis:
+                engine.all_hypotheses[node.hypothesis.id] = node.hypothesis
+            
+            # Add initial hypotheses from root node
+            if node.hypotheses:
+                for hyp in node.hypotheses:
+                    engine.all_hypotheses[hyp.id] = hyp
+            
+            # Add child hypotheses from expanded nodes
+            if node.child_hypotheses:
+                for hyp in node.child_hypotheses:
+                    engine.all_hypotheses[hyp.id] = hyp
+        
+        return engine
 

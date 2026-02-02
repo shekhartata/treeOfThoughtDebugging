@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { uploadArtifact, unfocusBranches } from '../services/api';
 import '../styles/ArtifactUpload.css';
 
-function ArtifactUpload({ branches, isFocused, currentBranchIds, onStateUpdate, onRefresh }) {
+function ArtifactUpload({ branches, isFocused, currentBranchIds, onStateUpdate, onRefresh, sessionId }) {
   const [artifactName, setArtifactName] = useState('');
   const [artifactContent, setArtifactContent] = useState('');
   const [selectAll, setSelectAll] = useState(true);
@@ -28,7 +28,7 @@ function ArtifactUpload({ branches, isFocused, currentBranchIds, onStateUpdate, 
 
   const handleUnfocus = async () => {
     try {
-      const data = await unfocusBranches();
+      const data = await unfocusBranches(sessionId);
       if (onStateUpdate) onStateUpdate(data);
       if (onRefresh) onRefresh();
     } catch (error) {
@@ -59,7 +59,7 @@ function ArtifactUpload({ branches, isFocused, currentBranchIds, onStateUpdate, 
     try {
       setLoading(true);
       setError(null);
-      const data = await uploadArtifact(artifactName, artifactContent, branchIds);
+      const data = await uploadArtifact(artifactName, artifactContent, branchIds, sessionId);
       if (onStateUpdate) onStateUpdate(data);
       if (onRefresh) onRefresh();
       

@@ -2,7 +2,7 @@ import React from 'react';
 import HypothesisCard from './HypothesisCard';
 import '../styles/HypothesesList.css';
 
-function HypothesesList({ hypotheses, onStateUpdate, onRefresh }) {
+function HypothesesList({ hypotheses, onStateUpdate, onRefresh, sessionId }) {
   if (!hypotheses || hypotheses.length === 0) {
     return <div className="hypotheses-empty">No hypotheses available.</div>;
   }
@@ -32,6 +32,7 @@ function HypothesesList({ hypotheses, onStateUpdate, onRefresh }) {
             hypothesisNumber={displayNumber}
             onStateUpdate={onStateUpdate}
             onRefresh={onRefresh}
+            sessionId={sessionId}
           />
         );
       })}

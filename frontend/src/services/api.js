@@ -52,7 +52,7 @@ export const initializeEngine = async (problemSummary, useHardcodedFallback = fa
   return response.data;
 };
 
-export const uploadArtifact = async (artifactName, artifactContent, branchIds = null) => {
+export const uploadArtifact = async (artifactName, artifactContent, branchIds = null, sessionId = null) => {
   const body = {
     artifact_name: artifactName,
     artifact_content: artifactContent,
@@ -60,73 +60,110 @@ export const uploadArtifact = async (artifactName, artifactContent, branchIds = 
   if (branchIds) {
     body.branch_ids = branchIds;
   }
+  if (sessionId) {
+    body.session_id = sessionId;
+  }
   const response = await api.post('/upload-artifact', body);
   return response.data;
 };
 
-export const getCurrentNode = async () => {
-  const response = await api.get('/current-node');
+export const getCurrentNode = async (config = {}) => {
+  const response = await api.get('/current-node', config);
   return response.data;
 };
 
-export const checkSession = async () => {
-  const response = await api.get('/check-session');
+export const checkSession = async (config = {}) => {
+  const response = await api.get('/check-session', config);
   return response.data;
 };
 
-export const backtrack = async (nodeId, autoRestore = true) => {
-  const response = await api.post('/backtrack', {
+export const backtrack = async (nodeId, autoRestore = true, sessionId = null) => {
+  const body = {
     node_id: nodeId,
     auto_restore: autoRestore,
-  });
+  };
+  if (sessionId) body.session_id = sessionId;
+  const response = await api.post('/backtrack', body);
   return response.data;
 };
 
-export const unfocusBranches = async () => {
-  const response = await api.post('/unfocus');
+export const unfocusBranches = async (sessionId = null) => {
+  const body = {};
+  if (sessionId) body.session_id = sessionId;
+  const response = await api.post('/unfocus', body);
   return response.data;
 };
 
-export const generateNode = async (nodeId) => {
-  const response = await api.post('/generate-node', {
-    node_id: nodeId,
-  });
+export const generateNode = async (nodeId, sessionId = null) => {
+  const body = { node_id: nodeId };
+  if (sessionId) body.session_id = sessionId;
+  const response = await api.post('/generate-node', body);
   return response.data;
 };
 
-export const pruneBranch = async (hypothesisId) => {
-  const response = await api.post('/prune-branch', {
-    hypothesis_id: hypothesisId,
-  });
+export const pruneBranch = async (hypothesisId, sessionId = null) => {
+  const body = { hypothesis_id: hypothesisId };
+  if (sessionId) body.session_id = sessionId;
+  const response = await api.post('/prune-branch', body);
   return response.data;
 };
 
-export const unpruneBranch = async (hypothesisId) => {
-  const response = await api.post('/unprune-branch', {
-    hypothesis_id: hypothesisId,
-  });
+export const unpruneBranch = async (hypothesisId, sessionId = null) => {
+  const body = { hypothesis_id: hypothesisId };
+  if (sessionId) body.session_id = sessionId;
+  const response = await api.post('/unprune-branch', body);
   return response.data;
 };
 
-export const focusBranch = async (hypothesisId) => {
-  const response = await api.post('/focus-branch', {
-    hypothesis_id: hypothesisId,
-  });
+export const focusBranch = async (hypothesisId, sessionId = null) => {
+  const body = { hypothesis_id: hypothesisId };
+  if (sessionId) body.session_id = sessionId;
+  const response = await api.post('/focus-branch', body);
   return response.data;
 };
 
-export const getFinalAnalysis = async () => {
-  const response = await api.get('/final-analysis');
+export const getFinalAnalysis = async (sessionId = null) => {
+  const config = sessionId ? { params: { session_id: sessionId } } : {};
+  const response = await api.get('/final-analysis', config);
   return response.data;
 };
 
-export const resetSession = async () => {
-  const response = await api.post('/reset');
+export const resetSession = async (sessionId = null) => {
+  const body = sessionId ? { session_id: sessionId } : {};
+  const response = await api.post('/reset', body);
   return response.data;
 };
 
-export const getNodeEvaluationDetails = async (nodeId) => {
-  const response = await api.get(`/node-evaluation-details/${nodeId}`);
+export const getNodeEvaluationDetails = async (nodeId, sessionId = null) => {
+  const config = sessionId ? { params: { session_id: sessionId } } : {};
+  const response = await api.get(`/node-evaluation-details/${nodeId}`, config);
+  return response.data;
+};
+
+export const getHistory = async (sessionId = null) => {
+  const config = sessionId ? { params: { session_id: sessionId } } : {};
+  const response = await api.get('/history', config);
+  return response.data;
+};
+
+// Session management APIs
+export const listUnfinishedSessions = async () => {
+  const response = await api.get('/sessions/unfinished');
+  return response.data;
+};
+
+export const loadSession = async (sessionId) => {
+  const response = await api.get(`/sessions/${sessionId}/load`);
+  return response.data;
+};
+
+export const saveSession = async (sessionId) => {
+  const response = await api.post(`/sessions/${sessionId}/save`);
+  return response.data;
+};
+
+export const getSessionStatus = async (sessionId) => {
+  const response = await api.get(`/sessions/${sessionId}/status`);
   return response.data;
 };
 

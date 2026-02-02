@@ -16,7 +16,7 @@ const nodeTypes = {
   custom: CustomNode,
 };
 
-function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack, onExpand, onRefresh }) {
+function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack, onExpand, onRefresh, sessionId }) {
   const [nodes, setNodes] = useState(initialNodes || []);
   const [reactNodes, setReactNodes, onNodesChange] = useNodesState([]);
   const [reactEdges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -137,7 +137,7 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
   const handleBacktrack = async (nodeId) => {
     try {
       const { backtrack } = await import('../services/api');
-      const data = await backtrack(nodeId, true);
+      const data = await backtrack(nodeId, true, sessionId);
       if (onBacktrack) onBacktrack(data);
       if (onRefresh) onRefresh();
     } catch (error) {
@@ -148,7 +148,7 @@ function TreeView({ nodes: initialNodes, currentNodeId, rootNodeId, onBacktrack,
   const handleGenerate = async (nodeId) => {
     try {
       const { generateNode } = await import('../services/api');
-      const data = await generateNode(nodeId);
+      const data = await generateNode(nodeId, sessionId);
       if (onExpand) onExpand(data);
       if (onRefresh) onRefresh();
     } catch (error) {
