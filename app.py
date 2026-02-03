@@ -8,6 +8,7 @@ from flask_cors import CORS
 from tot_engine import TreeOfThoughtEngine, ReasoningNode
 from llm_integration import LLMIntegration
 from session_manager import SessionManager
+from auth import AuthManager, AuthError
 import os
 import json
 import logging
@@ -17,6 +18,7 @@ from dotenv import load_dotenv
 import httpx
 import uuid
 import gzip
+import secrets
 
 # Load environment variables from .env file
 load_dotenv()
@@ -24,8 +26,65 @@ load_dotenv()
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 
-# Initialize session manager
+# Initialize session manager and auth
 session_manager = SessionManager()
+auth_manager = AuthManager(session_manager.db)
+
+
+def get_current_user():
+    """Return current user dict from Authorization Bearer token, or None."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header[7:].strip()
+    if not token:
+        return None
+    payload = auth_manager.verify_token(token)
+    if not payload:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    return auth_manager.get_user_by_id(user_id)
+
+
+def get_board_token_from_request():
+    """Return board share token from header X-Board-Token or query access_token."""
+    # Header is case-insensitive in HTTP; try common casings for proxies/clients
+    token = (
+        request.headers.get("X-Board-Token")
+        or request.headers.get("x-board-token")
+        or request.args.get("access_token")
+    )
+    return (token or "").strip() or None
+
+
+def can_access_board(session_id: str) -> bool:
+    """Return True if request is allowed to access this board (owner, shared_with, or valid share token)."""
+    session_doc = session_manager.sessions.find_one({"_id": session_id})
+    if not session_doc:
+        return False
+    user = get_current_user()
+    owner_id = session_doc.get("owner_id")
+    shared_ids = [str(x) for x in (session_doc.get("shared_with") or [])]
+    user_id = str((user or {}).get("id") or "")
+    board_token = get_board_token_from_request()
+
+    # Valid share token always grants access (owner or collaborator who joined via link)
+    if board_token and session_doc.get("share_token") == board_token:
+        return True
+
+    # Sessions with owner_id: only owner or users in shared_with
+    if owner_id is not None:
+        if user and str(owner_id) == user_id:
+            return True
+        if user and user_id in shared_ids:
+            return True
+        return False
+
+    # Legacy sessions (no owner_id): only allow with valid board token (no open access)
+    return False
+
 
 # In-memory session storage (session_id -> engine)
 active_engines: Dict[str, TreeOfThoughtEngine] = {}
@@ -125,8 +184,24 @@ def get_engine_from_request():
         if not session_id:
             session_id = request.args.get('session_id')
     
+    # If no session_id but client sent board share token (e.g. collaborator from share link),
+    # resolve session_id from the token so the client does not need to send session_id.
     if not session_id:
+        board_token = get_board_token_from_request()
+        if board_token:
+            session_doc = session_manager.sessions.find_one({'share_token': board_token})
+            if session_doc:
+                session_id = session_doc['_id']
+    
+    if not session_id:
+        logging.getLogger(__name__).warning(
+            "session_id missing: not in %s params/body and could not resolve from X-Board-Token",
+            request.path,
+        )
         return None, None, ({'error': 'session_id is required'}, 400)
+    
+    if not can_access_board(session_id):
+        return None, session_id, ({'error': 'Access denied to this board'}, 403)
     
     engine = get_or_load_engine(session_id)
     if not engine:
@@ -142,6 +217,99 @@ def index():
         return send_from_directory('static', 'index.html')
     else:
         return render_template('index.html')
+
+
+# ==================== Auth Endpoints ====================
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    """Register a new user. Returns user and token."""
+    data = request.json or {}
+    email = (data.get('email') or '').strip()
+    password = data.get('password') or ''
+    name = (data.get('name') or '').strip() or None
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+    if not password:
+        return jsonify({'error': 'Password is required'}), 400
+    try:
+        user = auth_manager.register(email, password, name)
+        token = auth_manager.create_token(user['id'], user['email'])
+        return jsonify({'user': user, 'token': token})
+    except AuthError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    """Login with email and password. Returns user and token."""
+    data = request.json or {}
+    email = (data.get('email') or '').strip()
+    password = data.get('password') or ''
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+    if not password:
+        return jsonify({'error': 'Password is required'}), 400
+    try:
+        result = auth_manager.login(email, password)
+        return jsonify(result)
+    except AuthError as e:
+        return jsonify({'error': str(e)}), 401
+
+
+@app.route('/api/auth/me', methods=['GET'])
+def auth_me():
+    """Return current user from JWT. Requires Authorization: Bearer <token>."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+    return jsonify({'user': user})
+
+
+@app.route('/api/users/search', methods=['GET'])
+def search_users():
+    """Search users by name or email (enterprise members). Auth required."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+    q = request.args.get('q', '').strip()
+    limit = min(int(request.args.get('limit', 20)), 50)
+    users = auth_manager.search_users(q, limit=limit)
+    return jsonify({'users': users})
+
+
+@app.route('/api/join', methods=['GET'])
+def join_board():
+    """Join a board with a share token. Requires login; user must be owner or in shared_with."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Sign in required to open this shared board'}), 401
+    token = request.args.get('token', '').strip()
+    if not token:
+        return jsonify({'error': 'Token is required'}), 400
+    session_doc = session_manager.sessions.find_one({'share_token': token})
+    if not session_doc:
+        return jsonify({'error': 'Invalid or expired token'}), 404
+    if session_doc.get('session_status') == 'finished':
+        return jsonify({'error': 'This board is closed'}), 400
+    owner_id = session_doc.get('owner_id')
+    shared_with = [str(x) for x in (session_doc.get('shared_with') or [])]
+    user_id = str(user.get('id') or '')
+    # Legacy sessions (no owner_id): any logged-in user with token can join
+    if owner_id is None:
+        pass  # allow
+    elif str(owner_id) == user_id:
+        pass  # owner
+    elif user_id in shared_with:
+        pass  # shared with this user
+    else:
+        return jsonify({'error': 'You do not have access to this board. It was shared with specific people only.'}), 403
+    return jsonify({
+        'session_id': session_doc['_id'],
+        'problem_summary': session_doc.get('problem_summary', ''),
+        'share_token': token,
+    })
+
 
 @app.route('/api/detect-local-llm', methods=['GET'])
 def detect_local_llm():
@@ -246,6 +414,9 @@ def initialize():
     active_engines[session_id] = engine
     active_llm_integrations[session_id] = llm_integration
     
+    # Owner for board access (logged-in user who creates the session)
+    owner_id = (get_current_user() or {}).get('id')
+    
     # Auto-save after initialization to ensure nodes are persisted (non-blocking)
     import threading
     def auto_save_async():
@@ -257,6 +428,8 @@ def initialize():
             llm_provider = llm_integration.provider_name if llm_integration else None
             llm_model = llm_integration.model_name if llm_integration else None
             session_data, nodes_data = engine.to_dict_for_db(session_id, llm_provider, llm_model)
+            if owner_id:
+                session_data['owner_id'] = owner_id
             
             import logging
             logger = logging.getLogger(__name__)
@@ -277,9 +450,11 @@ def initialize():
     save_thread = threading.Thread(target=auto_save_async, daemon=True)
     save_thread.start()
     
+    is_owner = bool(owner_id)
     return jsonify({
         'success': True,
         'session_id': session_id,
+        'is_owner': is_owner,
         'node': {
             'id': initial_node.id,
             'step_number': initial_node.step_number,
@@ -410,11 +585,13 @@ def list_unfinished_sessions():
 
 @app.route('/api/sessions/<session_id>/load', methods=['GET'])
 def load_session(session_id: str):
-    """Load an existing session (resume debugging)."""
+    """Load an existing session (resume debugging). Requires owner or valid share token."""
     import logging
     logger = logging.getLogger(__name__)
     
     try:
+        if not can_access_board(session_id):
+            return jsonify({"error": "Access denied to this board"}), 403
         # First check if session exists in MongoDB
         session_data = session_manager.load_session(session_id)
         if not session_data:
@@ -458,9 +635,17 @@ def load_session(session_id: str):
                 "active_branches": 0
             }
         
+        user = get_current_user()
+        owner_id = session_data.get("owner_id")
+        user_id = str((user or {}).get("id") or "")
+        is_owner = bool(
+            user
+            and (str(owner_id or "") == user_id or owner_id is None)
+        )
         return jsonify({
             "success": True,
             "session_id": session_id,
+            "is_owner": is_owner,
             "session": {
                 "problem_summary": session_data.get("problem_summary"),
                 "session_status": session_data.get("session_status"),
@@ -478,9 +663,89 @@ def load_session(session_id: str):
         }), 500
 
 
+@app.route('/api/sessions/<session_id>/share-token', methods=['POST', 'GET'])
+def share_token(session_id: str):
+    """Get or create share token for the board. Owner only. Returns share_token and share_url."""
+    session_doc = session_manager.sessions.find_one({'_id': session_id})
+    if not session_doc:
+        return jsonify({'error': 'Session not found'}), 404
+    user = get_current_user()
+    owner_id = session_doc.get('owner_id')
+    user_id = str((user or {}).get('id') or '')
+    is_owner = user and (str(owner_id or '') == user_id or owner_id is None)
+    if not is_owner:
+        return jsonify({'error': 'Only the board owner can share this board'}), 403
+    share_token_value = session_doc.get('share_token')
+    if not share_token_value:
+        share_token_value = secrets.token_urlsafe(32)
+        session_manager.sessions.update_one(
+            {'_id': session_id},
+            {'$set': {'share_token': share_token_value, 'updated_at': datetime.utcnow()}}
+        )
+    # Frontend will build URL; we give origin-agnostic path or full URL from request
+    base = request.host_url.rstrip('/')
+    share_url = f"{base}?token={share_token_value}"
+    return jsonify({'share_token': share_token_value, 'share_url': share_url})
+
+
+@app.route('/api/sessions/<session_id>/share-with', methods=['POST'])
+def share_with_user(session_id: str):
+    """Add a user to this board's shared_with list (owner only). Link can then be used by that user."""
+    session_doc = session_manager.sessions.find_one({'_id': session_id})
+    if not session_doc:
+        return jsonify({'error': 'Session not found'}), 404
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+    owner_id = session_doc.get('owner_id')
+    user_id = str((user or {}).get('id') or '')
+    is_owner = str(owner_id or '') == user_id or owner_id is None
+    if not is_owner:
+        return jsonify({'error': 'Only the board owner can share with others'}), 403
+    data = request.json or {}
+    target_user_id = (data.get('user_id') or '').strip()
+    if not target_user_id:
+        return jsonify({'error': 'user_id is required'}), 400
+    # Ensure target user exists
+    target = auth_manager.get_user_by_id(target_user_id)
+    if not target:
+        return jsonify({'error': 'User not found'}), 404
+    target_user_id = str(target_user_id)
+    shared_with = [str(x) for x in (session_doc.get('shared_with') or [])]
+    if target_user_id not in shared_with:
+        shared_with.append(target_user_id)
+        session_manager.sessions.update_one(
+            {'_id': session_id},
+            {'$set': {'shared_with': shared_with, 'updated_at': datetime.utcnow()}}
+        )
+    return jsonify({
+        'shared_with': shared_with,
+        'added': {'id': target['id'], 'email': target['email'], 'name': target.get('name')}
+    })
+
+
+@app.route('/api/sessions/<session_id>/shared-with', methods=['GET'])
+def get_shared_with(session_id: str):
+    """List users this board is shared with (owner or shared users)."""
+    if not can_access_board(session_id):
+        return jsonify({'error': 'Access denied to this board'}), 403
+    session_doc = session_manager.sessions.find_one({'_id': session_id})
+    if not session_doc:
+        return jsonify({'error': 'Session not found'}), 404
+    shared_ids = session_doc.get('shared_with') or []
+    users = []
+    for uid in shared_ids:
+        u = auth_manager.get_user_by_id(uid)
+        if u:
+            users.append({'id': u['id'], 'email': u['email'], 'name': u.get('name')})
+    return jsonify({'shared_with': users})
+
+
 @app.route('/api/sessions/<session_id>/save', methods=['POST'])
 def save_session(session_id: str):
     """Save session to MongoDB (explicit save by user)."""
+    if not can_access_board(session_id):
+        return jsonify({'error': 'Access denied to this board'}), 403
     engine = get_or_load_engine(session_id)
     if not engine:
         return jsonify({"error": "Session not found"}), 404
@@ -505,12 +770,21 @@ def save_session(session_id: str):
     
     # Convert to dict format
     session_data, nodes_data = engine.to_dict_for_db(session_id, llm_provider, llm_model)
-    
+    # Preserve owner_id and shared_with from existing session (don't overwrite with engine-only data)
+    existing = session_manager.load_session(session_id)
+    if existing:
+        if existing.get("owner_id") is not None:
+            session_data["owner_id"] = existing["owner_id"]
+        if existing.get("shared_with") is not None:
+            session_data["shared_with"] = existing["shared_with"]
+        if existing.get("share_token") is not None:
+            session_data["share_token"] = existing["share_token"]
+
     # Log for debugging
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"Saving session {session_id}: {len(engine.nodes)} nodes in engine, {len(nodes_data)} nodes in nodes_data")
-    
+
     # Save to MongoDB
     try:
         session_manager.save_session(session_id, session_data, nodes_data)
@@ -529,6 +803,8 @@ def save_session(session_id: str):
 @app.route('/api/sessions/<session_id>/status', methods=['GET'])
 def get_session_status(session_id: str):
     """Check if session has unsaved changes."""
+    if not can_access_board(session_id):
+        return jsonify({'error': 'Access denied to this board'}), 403
     session = session_manager.load_session(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
@@ -552,6 +828,8 @@ def check_session():
     """Check if an active (unfinished) session exists (backward compatibility)."""
     session_id = request.args.get('session_id')
     if session_id:
+        if not can_access_board(session_id):
+            return jsonify({'has_session': False, 'session_id': session_id})
         # First check if session exists and is not finished
         session_doc = session_manager.sessions.find_one({'_id': session_id})
         if session_doc and session_doc.get('session_status') == 'finished':
@@ -568,15 +846,16 @@ def check_session():
             'session_id': session_id
         })
     
-    # If no session_id provided, check for any unfinished sessions
+    # If no session_id provided, check for any unfinished sessions this user can access
     unfinished = session_manager.list_unfinished_sessions()
     if unfinished:
-        # Return the most recent unfinished session
-        most_recent = max(unfinished, key=lambda s: s.get('created_at', ''))
-        return jsonify({
-            'has_session': True,
-            'session_id': most_recent.get('session_id')
-        })
+        accessible = [s for s in unfinished if can_access_board(s.get('session_id') or '')]
+        if accessible:
+            most_recent = max(accessible, key=lambda s: s.get('created_at', ''))
+            return jsonify({
+                'has_session': True,
+                'session_id': most_recent.get('session_id')
+            })
     
     return jsonify({'has_session': False})
 
@@ -641,8 +920,21 @@ def get_current_node():
     
     # Get all branches for branch selection UI
     branches = engine.get_all_branches_for_ui()
-    
+    session_doc = session_manager.sessions.find_one({'_id': session_id})
+    user = get_current_user()
+    # Logged-in user is owner if they created the board, or if board has no owner (legacy)
+    owner_id = session_doc.get('owner_id') if session_doc else None
+    user_id = str((user or {}).get('id') or '')
+    is_owner = bool(
+        user
+        and session_doc
+        and (
+            str(owner_id or '') == user_id
+            or owner_id is None
+        )
+    )
     return jsonify({
+        'is_owner': is_owner,
         'node': {
             'id': node.id,
             'step_number': node.step_number,
@@ -1114,6 +1406,58 @@ def generate_node():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/add-branch', methods=['POST'])
+def add_branch():
+    """Add a user-created hypothesis as a new node (manual branch). Owner or collaborator with token."""
+    engine, session_id, error_response = get_engine_from_request()
+    if error_response:
+        return jsonify(error_response[0]), error_response[1]
+    if not engine:
+        return jsonify({'error': 'Engine not initialized'}), 400
+    data = request.json or {}
+    description = (data.get('description') or '').strip()
+    category = (data.get('category') or '').strip() or None
+    parent_node_id = data.get('parent_node_id')
+    if not description:
+        return jsonify({'error': 'Hypothesis description is required'}), 400
+    try:
+        new_node = engine.add_manual_hypothesis(
+            description=description,
+            category=category,
+            parent_node_id=parent_node_id,
+        )
+        all_hypotheses = engine.get_all_hypotheses_from_tree()
+        branches = engine.get_all_branches_for_ui()
+        return jsonify({
+            'success': True,
+            'node': {
+                'id': new_node.id,
+                'step_number': new_node.step_number,
+                'hypothesis_id': new_node.hypothesis_id,
+                'hypothesis': {
+                    'id': new_node.hypothesis.id if new_node.hypothesis else None,
+                    'description': new_node.hypothesis.description if new_node.hypothesis else None,
+                    'category': new_node.hypothesis.category if new_node.hypothesis else None,
+                    'confidence': new_node.hypothesis.confidence if new_node.hypothesis else 0.0,
+                    'status': new_node.hypothesis.status if new_node.hypothesis else 'active',
+                } if new_node.hypothesis else None,
+                'parent_id': new_node.parent_id,
+            },
+            'all_hypotheses': [
+                {'id': h.id, 'description': h.description, 'category': h.category, 'confidence': h.confidence, 'status': h.status, 'evidence': h.evidence}
+                for h in all_hypotheses
+            ],
+            'branches': branches,
+            'tree_summary': engine.get_tree_summary(),
+            'session_id': session_id,
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/branches', methods=['GET'])
 def get_all_branches():
     """Get all branches (active and pruned) for UI display using pre-order traversal."""
@@ -1259,6 +1603,14 @@ def reset_session():
                 llm_provider = llm_integration.provider_name if llm_integration else None
                 llm_model = llm_integration.model_name if llm_integration else None
                 session_data, nodes_data = engine.to_dict_for_db(session_id, llm_provider, llm_model)
+                existing = session_manager.load_session(session_id)
+                if existing:
+                    if existing.get("owner_id") is not None:
+                        session_data["owner_id"] = existing["owner_id"]
+                    if existing.get("shared_with") is not None:
+                        session_data["shared_with"] = existing["shared_with"]
+                    if existing.get("share_token") is not None:
+                        session_data["share_token"] = existing["share_token"]
                 session_manager.save_session(session_id, session_data, nodes_data)
                 logging.info(f"Auto-saved session {session_id} before reset with {len(nodes_data)} nodes")
             except Exception as e:

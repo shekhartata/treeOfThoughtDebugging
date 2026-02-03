@@ -15,10 +15,11 @@ This tool helps Consulting Engineers (CEs) debug MongoDB issues through an itera
 
 ## Features
 
+### Core ToT & Analysis
 - 🌳 **Tree-of-Thought Reasoning**: Systematic hypothesis evaluation with branching and pruning
 - 📊 **Confidence Scoring**: Multi-factor scoring (priors, LLM evaluation, evidence-based)
 - 🔍 **Artifact Processing**: Upload and analyze MongoDB logs, metrics, and command outputs
-- 🤖 **LLM-Driven Analysis**: Fully powered by GPT-5 for hypothesis generation, evaluation, and root cause analysis
+- 🤖 **LLM-Driven Analysis**: Hypothesis generation, evaluation, and root cause analysis (OpenAI, Groq, Ollama)
 - 🎯 **Interactive Web UI**: Modern React-based interface with React Flow tree visualization
 - 🔄 **Backtracking**: Explore alternate hypothesis branches
 - 🎨 **Focused Mode**: Evaluate specific branches after backtracking
@@ -27,11 +28,19 @@ This tool helps Consulting Engineers (CEs) debug MongoDB issues through an itera
 - 📈 **Node Generation**: Generate new exploration directions from any node
 - 🎯 **Final Analysis**: Available at any time, not just when complete
 
+### Authentication & Multi-User
+- 🔐 **Sign in / Sign up**: JWT-based auth; register and log in with email/password
+- 👤 **Owner vs Collaborator**: Boards belong to the creating user; header shows "Owner" or "Collaborator"
+- 📤 **Share boards**: Owner can share via link; search users by name/email and add them to the board
+- 🔗 **Restricted sharing**: Share links work only for users the owner has added; sign-in required to open a shared link
+- 🚪 **Sign out**: Clear session and board; next user sees Login and never the previous user’s board
+
 ## Prerequisites
 
 1. **Python 3.8+** with pip
 2. **Node.js 16+** with npm
-3. **OpenAI API Key** (set in `.env` file)
+3. **OpenAI API Key** (or Groq) and **JWT_SECRET** in `.env` (see [Environment variables](#environment-variables))
+4. **MongoDB** (optional; used for session and user persistence; defaults to local MongoDB if `MONGODB_URI` is not set)
 
 ## Installation
 
@@ -83,11 +92,13 @@ This will:
 
 5. **Set up environment variables (REQUIRED):**
    ```bash
-   # Create .env file in project root
-   echo "OPENAI_API_KEY=your_api_key_here" > .env
-   # Edit .env and replace with your actual API key
-   # Get your API key from https://platform.openai.com/api-keys
+   cp .env.sample .env
+   # Edit .env and set at least:
+   # - OPENAI_API_KEY (or GROQ_API_KEY if using Groq)
+   # - JWT_SECRET (e.g. openssl rand -hex 32)
+   # - MONGODB_URI (if not using default local MongoDB)
    ```
+   See [Environment variables](#environment-variables) below for the full list.
 
 ### Activating Virtual Environment
 
@@ -150,7 +161,32 @@ python app.py
 
 **Access the app:** Open `http://localhost:5000` in your browser
 
+### Important: Both servers for development
+
+When using **Option 1** (Vite dev server on port 5173), the frontend proxies `/api` to Flask on port 5000. **Start Flask first** (Terminal 1), then start the frontend (Terminal 2). If Flask is not running, you will see `ECONNREFUSED` in the terminal and the app may show a loading or login screen that never completes.
+
+## Environment variables
+
+Create a `.env` file in the project root (e.g. `cp .env.sample .env`) and set:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | Yes (or Groq) | OpenAI API key for LLM; see [LLM Provider Configuration](#llm-provider-configuration) |
+| `JWT_SECRET` | Yes | Secret for JWT signing (min 32 chars); e.g. `openssl rand -hex 32` |
+| `MONGODB_URI` | No | MongoDB connection string; default uses local MongoDB |
+| `MONGODB_DATABASE_NAME` | No | Database name; default `tot_debugging` |
+| `LLM_PROVIDER` | No | `openai`, `groq`, or `ollama` |
+| `GROQ_API_KEY` | If Groq | Groq API key when using Groq provider |
+
 ## Usage
+
+### Authentication and sharing
+
+1. **Sign in**: Open the app; you’ll see the Login screen. Sign in or create an account (email + password).
+2. **Owner view**: After signing in, start a new board (problem summary). You are the **Owner**; the header shows “Owner” and a **Share** button.
+3. **Share a board**: Click **Share**, search for users by name or email, add them, then copy the share link. Only those users (and you) can open the link after signing in.
+4. **Open a shared link**: Open the link in a browser; sign in if prompted. If you’re one of the users the owner added, you’ll see the board as **Collaborator** (no Share button).
+5. **Sign out**: Click **Sign out** in the header. Session and board are cleared; the next user will see the Login screen and never the previous user’s board.
 
 ### Workflow
 
@@ -228,38 +264,59 @@ All analysis is performed by GPT-5, ensuring the tool can handle any MongoDB iss
 ## Architecture
 
 ### Backend
+- **`app.py`**: Flask web application and REST API (sessions, auth, share, ToT endpoints)
+- **`auth.py`**: JWT auth, user registration/login, user search, `AuthManager`
 - **`tot_engine.py`**: Core Tree-of-Thought reasoning engine with hypothesis management and pruning logic
-- **`llm_integration.py`**: GPT-5 integration for all LLM operations (hypothesis generation, evaluation, requests, final analysis)
-- **`app.py`**: Flask web application and REST API
+- **`llm_integration.py`**: LLM integration for hypothesis generation, evaluation, and analysis (OpenAI, Groq, Ollama)
+- **`session_manager.py`**: MongoDB persistence for sessions and nodes; `owner_id` and `shared_with` for access control
 - **`cli_tool.py`**: Command-line interface alternative
 
 ### Frontend
-- **`frontend/src/App.jsx`**: Main React application component
-- **`frontend/src/components/`**: React components (TreeView, HypothesesList, ArtifactUpload, etc.)
-- **`frontend/src/services/api.js`**: API client for Flask backend
-- **`frontend/src/styles/`**: CSS files for components
-- **React Flow**: Used for interactive tree visualization
+- **`frontend/src/App.jsx`**: Main React app (auth gate, loading, Login, init form, board view, Share, Sign out)
+- **`frontend/src/contexts/AuthContext.jsx`**: Auth state, login/register/logout, JWT in localStorage
+- **`frontend/src/components/`**: Login, InitializeForm, CurrentState, TreeView, ShareModal, ErrorBoundary, etc.
+- **`frontend/src/services/api.js`**: API client (auth, sessions, join, share-with, board token)
+- **`frontend/src/styles/`**: CSS for components
+- **React Flow**: Interactive tree visualization
 
 ### Templates
 - **`templates/index.html`**: Legacy HTML template (fallback if React build doesn't exist)
+- **`static/`**: React production build (after `npm run build`); Flask serves `static/index.html` when present
 
 ## API Endpoints
 
-The tool provides a REST API for programmatic access:
+The tool provides a REST API for programmatic access.
 
+### Auth
+- `POST /api/auth/register` - Register (email, password, optional name); returns user and JWT
+- `POST /api/auth/login` - Login (email, password); returns user and JWT
+- `GET /api/auth/me` - Current user (requires `Authorization: Bearer <token>`)
+
+### Sharing and access
+- `GET /api/join?token=<share_token>` - Join a board by share link (requires login; user must be owner or in `shared_with`)
+- `POST /api/sessions/<session_id>/share-token` - Get or create share token (owner only)
+- `GET /api/users/search?q=<query>` - Search users by name/email (auth required)
+- `POST /api/sessions/<session_id>/share-with` - Add user to board’s `shared_with` (owner only)
+- `GET /api/sessions/<session_id>/shared-with` - List users the board is shared with
+- `GET /api/check-session` - Check if session exists and current user has access; optional `?session_id=`
+
+### ToT and session
 - `POST /api/initialize` - Initialize a new debugging session
 - `POST /api/upload-artifact` - Upload and process an artifact
-- `GET /api/current-node` - Get current reasoning state
+- `GET /api/current-node` - Get current reasoning state (includes `is_owner`)
 - `POST /api/backtrack` - Backtrack to a previous node
 - `POST /api/generate-node` - Generate new exploration directions from a node
 - `POST /api/focus-branch` - Focus on a specific branch for evaluation
 - `POST /api/unfocus` - Clear focus and evaluate all active branches
 - `POST /api/prune-branch` - Manually prune a branch
 - `POST /api/unprune-branch` - Restore a pruned branch
+- `POST /api/add-branch` - Add a manual hypothesis (branch)
 - `GET /api/final-analysis` - Get root cause analysis (available at any time)
 - `GET /api/tree-summary` - Get reasoning tree summary
 - `GET /api/history` - Get full reasoning history
 - `POST /api/reset` - Reset session and clear all tree content
+- `GET /api/sessions/<session_id>/load` - Load session (owner or shared_with)
+- `POST /api/sessions/<session_id>/save` - Save session
 
 ## Example Session
 
@@ -336,14 +393,15 @@ OPENAI_API_KEY=sk-your-key-here
   - Artifact evaluation
   - Next data requests
   - Final root cause analysis
-- **Adapter Pattern**: LLM providers are swappable via `llm_adapters/` module
-- **Error Logging**: All LLM failures are logged with detailed error information for debugging
-- **Fallback Support**: If LLM fails, the tool falls back to hardcoded hypotheses (pass `use_hardcoded_fallback=True`)
-- **Data Privacy**: Customer data is sent to LLM API for processing
-- **Session Management**: Use "End Debugging Session" to clear all tree content and start fresh with a new issue
-- **Smart Pruning**: Top 2 hypotheses are protected from pruning unless confidence < 5%
-- **Final Analysis**: Available at any time, not just when session is complete
-- **Ephemeral Sessions**: Current implementation stores sessions in memory only - data is lost on server restart
+- **Auth** - Sign in or register to use the app. JWT is stored in the browser; set `JWT_SECRET` in `.env`.
+- **Sharing** - Only the board owner can share. Share links require sign-in; only users the owner added (or the owner) can open the link.
+- **Session persistence** - Sessions and nodes are stored in MongoDB; boards have `owner_id` and `shared_with` for access control.
+- **Sign out** - Clears session and board so the next user always sees Login.
+- **Adapter Pattern**: LLM providers are swappable via `llm_adapters/` and UI (InitializeForm).
+- **Fallback Support**: If LLM fails, the tool can use hardcoded hypotheses (`use_hardcoded_fallback=True`).
+- **Data Privacy**: Customer data may be sent to the configured LLM API for processing.
+- **Smart Pruning**: Top 2 hypotheses are protected from pruning unless confidence < 5%.
+- **Final Analysis**: Available at any time, not just when session is complete.
 
 ## Troubleshooting
 
@@ -371,10 +429,10 @@ OPENAI_API_KEY=sk-your-key-here
 - Check terminal output for the actual port number
 - Or change port in `frontend/vite.config.js`
 
-**API connection errors:**
-- Make sure Flask is running before starting React
-- Check that Flask is on port 5000 (or update proxy in `vite.config.js`)
-- Check browser console for detailed error messages
+**API connection errors / ECONNREFUSED:**
+- Start **Flask first** (Terminal 1: `python app.py`), then start the frontend (Terminal 2: `cd frontend && npm run dev`)
+- Vite proxies `/api` to `http://localhost:5000`; if Flask isn’t running, requests fail and the app can stick on loading or login
+- For production (Flask only on port 5000), run `cd frontend && npm run build` so Flask serves the latest React build from `static/`
 
 **Build errors:**
 ```bash
@@ -426,33 +484,38 @@ npm install
 
 ```
 treeOfThoughtProj/
-├── app.py                 # Flask web application
+├── app.py                 # Flask web application and REST API
+├── auth.py                # JWT auth, AuthManager, user CRUD, search
+├── session_manager.py    # MongoDB sessions/nodes; owner_id, shared_with
 ├── tot_engine.py          # Core ToT reasoning engine
 ├── llm_integration.py     # LLM integration (thin wrapper over adapters)
 ├── llm_adapters/          # LLM adapter pattern implementation
 │   ├── __init__.py        # Package exports
 │   ├── base_adapter.py    # Abstract base class for adapters
 │   ├── config.py          # Provider configuration and factory
-│   ├── openai_adapter.py  # OpenAI/GPT-5 adapter
-│   └── groq_adapter.py    # Groq/DeepSeek adapter (fast inference)
+│   ├── openai_adapter.py  # OpenAI adapter
+│   ├── groq_adapter.py    # Groq adapter (fast inference)
+│   └── ollama_adapter.py  # Ollama (local) adapter
 ├── cli_tool.py            # Command-line interface
 ├── test_demo.py           # Demo/test script
-├── requirements.txt       # Python dependencies
-├── .env                   # Environment variables (create this)
+├── requirements.txt      # Python dependencies
+├── .env                   # Environment variables (create from .env.sample)
+├── .env.sample            # Example env vars
 ├── setup.sh               # Setup script
 ├── README.md              # This file
 ├── EVALUATION.md          # Project evaluation and use cases
 ├── frontend/              # React frontend
 │   ├── src/
-│   │   ├── components/    # React components
-│   │   ├── services/      # API client
+│   │   ├── components/    # Login, InitializeForm, CurrentState, ShareModal, ErrorBoundary, etc.
+│   │   ├── contexts/      # AuthContext
+│   │   ├── services/      # api.js (auth, sessions, join, share)
 │   │   ├── styles/        # CSS files
 │   │   ├── App.jsx
 │   │   └── main.jsx
 │   ├── package.json
-│   └── vite.config.js
-├── templates/             # Legacy HTML template
-├── static/                # Production build output (after npm run build)
+│   └── vite.config.js     # Vite config; proxy /api -> localhost:5000
+├── templates/             # Legacy HTML template (fallback)
+├── static/                # React production build (after npm run build)
 └── venv/                  # Virtual environment (created by setup)
 ```
 

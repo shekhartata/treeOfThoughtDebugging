@@ -588,6 +588,28 @@
             border-radius: 4px;
             border: 1px solid #ddd;
         }
+        .add-hypothesis-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .add-hypothesis-overlay.open { display: flex; }
+        .add-hypothesis-modal {
+            background: white;
+            padding: 24px;
+            border-radius: 8px;
+            min-width: 400px;
+            max-width: 90%;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+        }
+        .add-hypothesis-modal h3 { margin-top: 0; }
+        .add-hypothesis-modal .form-group { margin-bottom: 16px; }
+        .add-hypothesis-modal textarea, .add-hypothesis-modal select { width: 100%; padding: 8px; }
+        .add-hypothesis-modal .actions { margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end; }
     </style>
 </head>
 <body>
@@ -626,6 +648,12 @@
                     <ul id="requests-list"></ul>
                 </div>
                 
+                <div class="section" style="margin-top: 15px;">
+                    <button type="button" onclick="openAddHypothesisModal()" style="background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                        ➕ Add hypothesis (create branch)
+                    </button>
+                </div>
+                
                 <div class="artifact-upload" id="artifact-section">
                     <h3>📎 Upload Artifact</h3>
                     <div id="focused-mode-indicator" style="display: none; background: #fff3cd; border: 2px solid #ffc107; border-radius: 6px; padding: 12px; margin-bottom: 15px;">
@@ -660,6 +688,33 @@
                         </div>
                     </div>
                     <button id="upload-btn" onclick="uploadArtifact()">Upload & Analyze</button>
+                </div>
+                
+                <!-- Add hypothesis modal -->
+                <div class="add-hypothesis-overlay" id="add-hypothesis-overlay" onclick="if (event.target === this) closeAddHypothesisModal();">
+                    <div class="add-hypothesis-modal" onclick="event.stopPropagation();">
+                        <h3>Add hypothesis (manual branch)</h3>
+                        <div class="form-group">
+                            <label for="add-hyp-desc">Description *</label>
+                            <textarea id="add-hyp-desc" rows="3" placeholder="Describe the hypothesis..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="add-hyp-category">Category</label>
+                            <select id="add-hyp-category">
+                                <option value="">-- Select --</option>
+                                <option value="performance">Performance</option>
+                                <option value="correctness">Correctness</option>
+                                <option value="configuration">Configuration</option>
+                                <option value="operational">Operational</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div id="add-hypothesis-error" style="color: #c62828; margin-bottom: 10px; display: none;"></div>
+                        <div class="actions">
+                            <button type="button" onclick="closeAddHypothesisModal()" style="background: #9e9e9e; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Cancel</button>
+                            <button type="button" onclick="submitAddHypothesis()" style="background: #667eea; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Add hypothesis</button>
+                        </div>
+                    </div>
                 </div>
                 
                 <!-- History and Backtracking Section -->
@@ -720,6 +775,27 @@
     
     <script>
         const API_BASE = 'http://localhost:5000/api';
+        // Session ID required for current-node and history; set from /initialize, /check-session, or /join?token=
+        let currentSessionId = sessionStorage.getItem('current_session_id');
+        // Board token for collaborators (set when joining via share link); send as X-Board-Token for API access
+        let currentBoardToken = sessionStorage.getItem('board_token') || null;
+        
+        function currentNodeUrl() {
+            return currentSessionId ? `${API_BASE}/current-node?session_id=${encodeURIComponent(currentSessionId)}` : null;
+        }
+        function historyUrl() {
+            return currentSessionId ? `${API_BASE}/history?session_id=${encodeURIComponent(currentSessionId)}` : null;
+        }
+        function branchesUrl() {
+            return currentSessionId ? `${API_BASE}/branches?session_id=${encodeURIComponent(currentSessionId)}` : null;
+        }
+        function finalAnalysisUrl() {
+            return currentSessionId ? `${API_BASE}/final-analysis?session_id=${encodeURIComponent(currentSessionId)}` : null;
+        }
+        function withSessionBody(body) {
+            if (!currentSessionId) return body;
+            return Object.assign({}, body, { session_id: currentSessionId });
+        }
         
         function showMessage(message, type = 'success') {
             const messagesDiv = document.getElementById('messages');
@@ -752,6 +828,10 @@
                 const data = await response.json();
                 
                 if (response.ok) {
+                    if (data.session_id) {
+                        currentSessionId = data.session_id;
+                        sessionStorage.setItem('current_session_id', currentSessionId);
+                    }
                     document.getElementById('init-section').style.display = 'none';
                     document.getElementById('current-section').style.display = 'block';
                     document.getElementById('history-section').style.display = 'block';
@@ -794,11 +874,10 @@
             btn.innerHTML = '<span class="loading"></span> Processing...';
             
             try {
-                const requestBody = {
+                const requestBody = withSessionBody({
                     artifact_name: artifactName,
                     artifact_content: artifactContent
-                };
-                
+                });
                 if (branchIds) {
                     requestBody.branch_ids = branchIds;
                 }
@@ -883,6 +962,10 @@
         }
         
         async function updateCurrentState(data) {
+            if (data.session_id) {
+                currentSessionId = data.session_id;
+                sessionStorage.setItem('current_session_id', currentSessionId);
+            }
             // Handle both old format (data.node) and new format (data.branches, data.all_hypotheses)
             const node = data.node || { step_number: data.tree_summary?.current_step || 1 };
             const allHypotheses = data.all_hypotheses || (data.node?.hypotheses || []);
@@ -992,7 +1075,8 @@
             try {
                 const response = await fetch(`${API_BASE}/unfocus`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(withSessionBody({}))
                 });
                 
                 const data = await response.json();
@@ -1000,10 +1084,13 @@
                 if (response.ok) {
                     showMessage('Focus cleared. Future artifacts will evaluate all active branches.', 'success');
                     // Reload current state to update UI
-                    const currentResponse = await fetch(`${API_BASE}/current-node`);
-                    if (currentResponse.ok) {
-                        const currentData = await currentResponse.json();
-                        await updateCurrentState(currentData);
+                    const currentUrl = currentNodeUrl();
+                    if (currentUrl) {
+                        const currentResponse = await fetch(currentUrl);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            await updateCurrentState(currentData);
+                        }
                     }
                 } else {
                     showMessage(data.error || 'Failed to unfocus', 'error');
@@ -1015,7 +1102,9 @@
         
         async function loadBranches() {
             try {
-                const response = await fetch(`${API_BASE}/branches`);
+                const url = branchesUrl();
+                if (!url) return;
+                const response = await fetch(url);
                 if (response.ok) {
                     const data = await response.json();
                     // Store branches data for later use
@@ -1026,12 +1115,67 @@
             }
         }
         
+        function openAddHypothesisModal() {
+            if (!currentSessionId) {
+                showMessage('No active session', 'error');
+                return;
+            }
+            document.getElementById('add-hyp-desc').value = '';
+            document.getElementById('add-hyp-category').value = '';
+            document.getElementById('add-hypothesis-error').style.display = 'none';
+            document.getElementById('add-hypothesis-overlay').classList.add('open');
+        }
+        
+        function closeAddHypothesisModal() {
+            document.getElementById('add-hypothesis-overlay').classList.remove('open');
+        }
+        
+        async function submitAddHypothesis() {
+            const desc = document.getElementById('add-hyp-desc').value.trim();
+            const category = document.getElementById('add-hyp-category').value.trim() || null;
+            const errEl = document.getElementById('add-hypothesis-error');
+            if (!desc) {
+                errEl.textContent = 'Description is required';
+                errEl.style.display = 'block';
+                return;
+            }
+            errEl.style.display = 'none';
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (currentBoardToken) headers['X-Board-Token'] = currentBoardToken;
+                const response = await fetch(`${API_BASE}/add-branch`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(withSessionBody({ description: desc, category: category }))
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    closeAddHypothesisModal();
+                    showMessage('Hypothesis added');
+                    const currentUrl = currentNodeUrl();
+                    if (currentUrl) {
+                        const currentResponse = await fetch(currentUrl);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            await updateCurrentState(currentData);
+                        }
+                    }
+                } else {
+                    errEl.textContent = data.error || 'Failed to add hypothesis';
+                    errEl.style.display = 'block';
+                }
+            } catch (error) {
+                errEl.textContent = 'Error: ' + error.message;
+                errEl.style.display = 'block';
+            }
+        }
+        
         async function focusBranch(hypothesisId) {
             try {
                 const response = await fetch(`${API_BASE}/backtrack`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ hypothesis_id: hypothesisId })
+                    body: JSON.stringify(withSessionBody({ hypothesis_id: hypothesisId }))
                 });
                 
                 const data = await response.json();
@@ -1042,10 +1186,13 @@
                         : `Focused on branch: ${hypothesisId}`;
                     showMessage(message, 'success');
                     // Reload current state
-                    const currentResponse = await fetch(`${API_BASE}/current-node`);
-                    if (currentResponse.ok) {
-                        const currentData = await currentResponse.json();
-                        await updateCurrentState(currentData);
+                    const currentUrl = currentNodeUrl();
+                    if (currentUrl) {
+                        const currentResponse = await fetch(currentUrl);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            await updateCurrentState(currentData);
+                        }
                     }
                 } else {
                     showMessage(data.error || 'Failed to focus branch', 'error');
@@ -1064,7 +1211,7 @@
                 const response = await fetch(`${API_BASE}/prune-branch`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ hypothesis_id: hypothesisId })
+                    body: JSON.stringify(withSessionBody({ hypothesis_id: hypothesisId }))
                 });
                 
                 const data = await response.json();
@@ -1072,10 +1219,13 @@
                 if (response.ok) {
                     showMessage(`Branch ${hypothesisId} pruned`, 'success');
                     // Reload current state
-                    const currentResponse = await fetch(`${API_BASE}/current-node`);
-                    if (currentResponse.ok) {
-                        const currentData = await currentResponse.json();
-                        await updateCurrentState(currentData);
+                    const currentUrl = currentNodeUrl();
+                    if (currentUrl) {
+                        const currentResponse = await fetch(currentUrl);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            await updateCurrentState(currentData);
+                        }
                     }
                     
                     // Reload history if visible
@@ -1096,7 +1246,7 @@
                 const response = await fetch(`${API_BASE}/unprune-branch`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ hypothesis_id: hypothesisId })
+                    body: JSON.stringify(withSessionBody({ hypothesis_id: hypothesisId }))
                 });
                 
                 const data = await response.json();
@@ -1104,10 +1254,13 @@
                 if (response.ok) {
                     showMessage(`Branch ${hypothesisId} restored to active`, 'success');
                     // Reload current state
-                    const currentResponse = await fetch(`${API_BASE}/current-node`);
-                    if (currentResponse.ok) {
-                        const currentData = await currentResponse.json();
-                        await updateCurrentState(currentData);
+                    const currentUrl = currentNodeUrl();
+                    if (currentUrl) {
+                        const currentResponse = await fetch(currentUrl);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            await updateCurrentState(currentData);
+                        }
                     }
                     
                     // Reload branches for branch selection
@@ -1153,7 +1306,12 @@
             finalDiv.scrollIntoView({ behavior: 'smooth' });
             
             try {
-                const response = await fetch(`${API_BASE}/final-analysis`);
+                const url = finalAnalysisUrl();
+                if (!url) {
+                    showMessage('No active session', 'error');
+                    return;
+                }
+                const response = await fetch(url);
                 const data = await response.json();
                 
                 if (response.ok) {
@@ -1237,12 +1395,15 @@
                 try {
                     const response = await fetch(`${API_BASE}/reset`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' }
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(withSessionBody({}))
                     });
                     
                     const data = await response.json();
                     
                     if (response.ok) {
+                        currentSessionId = null;
+                        sessionStorage.removeItem('current_session_id');
                         showMessage('Session reset successfully!', 'success');
                         // Reload the page to start fresh
                         setTimeout(() => {
@@ -1271,7 +1432,9 @@
         
         async function loadHistory() {
             try {
-                const response = await fetch(`${API_BASE}/history`);
+                const url = historyUrl();
+                if (!url) return;
+                const response = await fetch(url);
                 const data = await response.json();
                 
                 if (response.ok) {
@@ -1534,7 +1697,9 @@
                 
                 // Try to get node info from history
                 try {
-                    const historyResponse = await fetch(`${API_BASE}/history`);
+                    const historyUrlForFetch = historyUrl();
+                    if (!historyUrlForFetch) return;
+                    const historyResponse = await fetch(historyUrlForFetch);
                     if (historyResponse.ok) {
                         const historyData = await historyResponse.json();
                         const node = historyData.nodes.find(n => n.id === nodeId);
@@ -1564,7 +1729,7 @@
                 const response = await fetch(`${API_BASE}/backtrack`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ node_id: nodeId, auto_restore: true })
+                    body: JSON.stringify(withSessionBody({ node_id: nodeId, auto_restore: true }))
                 });
                 
                 const data = await response.json();
@@ -1581,10 +1746,13 @@
                     }
                     showMessage(message, 'success');
                     // Reload current state
-                    const currentResponse = await fetch(`${API_BASE}/current-node`);
-                    if (currentResponse.ok) {
-                        const currentData = await currentResponse.json();
-                        await updateCurrentState(currentData);
+                    const currentUrl = currentNodeUrl();
+                    if (currentUrl) {
+                        const currentResponse = await fetch(currentUrl);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            await updateCurrentState(currentData);
+                        }
                     }
                     // Reload history to show new current node
                     await loadHistory();
@@ -1613,7 +1781,7 @@
                 const response = await fetch(`${API_BASE}/expand-node`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ node_id: nodeId })
+                    body: JSON.stringify(withSessionBody({ node_id: nodeId }))
                 });
                 
                 const data = await response.json();
@@ -1624,12 +1792,15 @@
                     // Update current state with new hypotheses
                     if (data.all_hypotheses) {
                         // Use the hypotheses from the expand response
-                        const currentResponse = await fetch(`${API_BASE}/current-node`);
-                        if (currentResponse.ok) {
-                            const currentData = await currentResponse.json();
-                            // Merge new hypotheses into the response
-                            currentData.all_hypotheses = data.all_hypotheses;
-                            await updateCurrentState(currentData);
+                        const currentUrl = currentNodeUrl();
+                        if (currentUrl) {
+                            const currentResponse = await fetch(currentUrl);
+                            if (currentResponse.ok) {
+                                const currentData = await currentResponse.json();
+                                // Merge new hypotheses into the response
+                                currentData.all_hypotheses = data.all_hypotheses;
+                                await updateCurrentState(currentData);
+                            }
                         } else {
                             // Fallback: create a mock current state with new hypotheses
                             await updateCurrentState({
@@ -1639,10 +1810,13 @@
                         }
                     } else {
                         // Reload current state normally
-                        const currentResponse = await fetch(`${API_BASE}/current-node`);
-                        if (currentResponse.ok) {
-                            const currentData = await currentResponse.json();
-                            await updateCurrentState(currentData);
+                        const currentUrl2 = currentNodeUrl();
+                        if (currentUrl2) {
+                            const currentResponse = await fetch(currentUrl2);
+                            if (currentResponse.ok) {
+                                const currentData = await currentResponse.json();
+                                await updateCurrentState(currentData);
+                            }
                         }
                     }
                     
@@ -1670,7 +1844,7 @@
                 const checkResponse = await fetch(`${API_BASE}/auto-backtrack`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ execute: false })
+                    body: JSON.stringify(withSessionBody({ execute: false }))
                 });
                 
                 const checkData = await checkResponse.json();
@@ -1722,7 +1896,7 @@
                 const response = await fetch(`${API_BASE}/auto-backtrack`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ execute: true })
+                    body: JSON.stringify(withSessionBody({ execute: true }))
                 });
                 
                 const data = await response.json();
@@ -1735,10 +1909,13 @@
                     if (panel) panel.remove();
                     
                     // Reload current state
-                    const currentResponse = await fetch(`${API_BASE}/current-node`);
-                    if (currentResponse.ok) {
-                        const currentData = await currentResponse.json();
-                        updateCurrentState(currentData);
+                    const currentUrl = currentNodeUrl();
+                    if (currentUrl) {
+                        const currentResponse = await fetch(currentUrl);
+                        if (currentResponse.ok) {
+                            const currentData = await currentResponse.json();
+                            updateCurrentState(currentData);
+                        }
                     }
                     // Reload history
                     await loadHistory();
@@ -1750,16 +1927,44 @@
             }
         }
         
-        // Load current state on page load
+        // Load current state on page load (require session_id: from ?token= join, check-session, or sessionStorage)
         window.addEventListener('load', async () => {
             try {
-                const response = await fetch(`${API_BASE}/current-node`);
-                if (response.ok) {
-                    const data = await response.json();
-                    document.getElementById('init-section').style.display = 'none';
-                    document.getElementById('current-section').style.display = 'block';
-                    document.getElementById('history-section').style.display = 'block';
-                    updateCurrentState(data);
+                const urlParams = new URLSearchParams(window.location.search);
+                const shareToken = urlParams.get('token');
+                if (shareToken) {
+                    try {
+                        const joinRes = await fetch(`${API_BASE}/join?token=${encodeURIComponent(shareToken)}`);
+                        const joinData = await joinRes.json();
+                        if (joinRes.ok && joinData.session_id) {
+                            currentSessionId = String(joinData.session_id);
+                            sessionStorage.setItem('current_session_id', currentSessionId);
+                            currentBoardToken = joinData.share_token || shareToken || null;
+                            if (currentBoardToken) sessionStorage.setItem('board_token', currentBoardToken);
+                            window.history.replaceState({}, '', window.location.pathname || '/');
+                        }
+                    } catch (e) {
+                        console.error('Join by token failed:', e);
+                    }
+                }
+                if (!currentSessionId) {
+                    const checkRes = await fetch(`${API_BASE}/check-session`);
+                    const checkData = await checkRes.json();
+                    if (checkRes.ok && checkData.has_session && checkData.session_id) {
+                        currentSessionId = checkData.session_id;
+                        sessionStorage.setItem('current_session_id', currentSessionId);
+                    }
+                }
+                const currentUrl = currentNodeUrl();
+                if (currentUrl) {
+                    const response = await fetch(currentUrl);
+                    if (response.ok) {
+                        const data = await response.json();
+                        document.getElementById('init-section').style.display = 'none';
+                        document.getElementById('current-section').style.display = 'block';
+                        document.getElementById('history-section').style.display = 'block';
+                        updateCurrentState(data);
+                    }
                 }
             } catch (error) {
                 // Session not initialized, that's fine

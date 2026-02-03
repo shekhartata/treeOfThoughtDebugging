@@ -1065,6 +1065,77 @@ class TreeOfThoughtEngine:
         
         return new_nodes
     
+    def add_manual_hypothesis(
+        self,
+        description: str,
+        category: Optional[str] = None,
+        parent_node_id: Optional[str] = None,
+    ) -> ReasoningNode:
+        """
+        Add a user-created hypothesis as a new node (branch) in the tree.
+        Does not use the LLM; the user supplies description and optional category.
+        
+        Args:
+            description: Hypothesis description (user-provided).
+            category: Optional category (e.g. indexing, schema). Defaults to 'schema'.
+            parent_node_id: Optional parent node id. Defaults to current node.
+        
+        Returns:
+            The newly created ReasoningNode.
+        """
+        if not self.root_node_id:
+            raise ValueError("Engine not initialized. Call initialize() first.")
+        
+        description = (description or "").strip()
+        if not description:
+            raise ValueError("Hypothesis description is required.")
+        
+        parent_node = self._get_node(parent_node_id) if parent_node_id else self.get_current_node()
+        if not parent_node:
+            raise ValueError("Parent node not found.")
+        
+        category = (category or "schema").strip().lower()
+        if category not in self.CATEGORY_PRIORS:
+            category = "schema"
+        prior_score = self.CATEGORY_PRIORS.get(category, 0.2)
+        
+        hyp_id = f"hyp_{len(self.all_hypotheses) + 1}"
+        hypothesis = Hypothesis(
+            id=hyp_id,
+            description=description,
+            category=category,
+            prior_score=prior_score,
+            confidence=0.5,
+            status="active",
+        )
+        self.all_hypotheses[hypothesis.id] = hypothesis
+        
+        # Add to parent's child_hypotheses so it appears in the tree
+        for n in self.nodes:
+            if n.id == parent_node.id:
+                n.child_hypotheses.append(hypothesis)
+                break
+        
+        self.step_counter += 1
+        new_node_id = f"node_{len(self.nodes) + 1}"
+        new_node = ReasoningNode(
+            id=new_node_id,
+            step_number=self.step_counter,
+            hypothesis_id=hypothesis.id,
+            hypothesis=hypothesis,
+            parent_id=parent_node.id,
+            requested_data=[],
+            evaluation_summary="User-added hypothesis (manual branch)",
+        )
+        
+        for n in self.nodes:
+            if n.id == parent_node.id:
+                n.children_ids.append(new_node.id)
+                break
+        self.nodes.append(new_node)
+        
+        return new_node
+    
     def should_auto_backtrack(self) -> Optional[Dict]:
         """
         Modular auto-backtrack detection logic for branch-based structure.
