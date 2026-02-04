@@ -93,7 +93,7 @@ Export your real values (replace placeholders), then create the namespace and se
 export JWT_SECRET="your-jwt-secret-at-least-32-characters"
 export OPENAI_API_KEY="sk-your-openai-key"
 export GROQ_API_KEY="gsk_your-groq-api-key"
-export MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/tot_debugging"
+export MONGODB_URI="your-mongo-uri"
 
 # Create namespace
 kubectl create namespace tot-debugging --dry-run=client -o yaml | kubectl apply -f -
