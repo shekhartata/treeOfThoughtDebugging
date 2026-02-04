@@ -64,6 +64,7 @@ api.interceptors.request.use((config) => {
     return Promise.reject(new Error('session_id is required for this request'));
   }
   if (sessionId) {
+    config.headers['X-Session-ID'] = sessionId;
     const boardToken = getBoardToken(sessionId);
     if (boardToken) {
       config.headers['X-Board-Token'] = boardToken;
@@ -238,6 +239,12 @@ export const getHistory = async (sessionId = null) => {
 // Session management APIs
 export const listUnfinishedSessions = async () => {
   const response = await api.get('/sessions/unfinished');
+  return response.data;
+};
+
+/** List active sessions the current user can access (owner or shared_with). Requires auth. */
+export const getMySessions = async () => {
+  const response = await api.get('/sessions/my-sessions');
   return response.data;
 };
 

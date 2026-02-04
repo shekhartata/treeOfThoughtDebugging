@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tot-debugging-config
+  namespace: tot-debugging
+  labels:
+    app: tot-debugging
+data:
+  # Non-sensitive config; override as needed
+  MONGODB_DATABASE_NAME: "tot_debugging"
+  LLM_PROVIDER: "openai"
+  FLASK_ENV: "production"

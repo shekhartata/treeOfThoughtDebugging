@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tot-debugging
+  namespace: tot-debugging
+  labels:
+    app: tot-debugging
+spec:
+  type: ClusterIP
+  selector:
+    app: tot-debugging
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5000
+      protocol: TCP

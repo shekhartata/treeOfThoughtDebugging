@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import { useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
+import Dashboard from './components/Dashboard';
 import InitializeForm from './components/InitializeForm';
 import CurrentState from './components/CurrentState';
 import TreeView from './components/TreeView';
@@ -22,12 +23,7 @@ function App() {
   );
   const [shareUrl, setShareUrl] = useState(null);
   const [showShareModal, setShowShareModal] = useState(false);
-  const [skipLoading, setSkipLoading] = useState(false);
-
-  // Reset skip-loading when user changes so new user always sees loading/next screen correctly
-  useEffect(() => {
-    setSkipLoading(false);
-  }, [user]);
+  const [showDashboard, setShowDashboard] = useState(false);
 
   const loadCurrentState = async (sid = null) => {
     try {
@@ -122,7 +118,6 @@ function App() {
       setIsInitialized(false);
       setCurrentState(null);
     }
-    setSkipLoading(false);
     let cancelled = false;
     setJoiningByToken(true);
     setError(null);
@@ -238,11 +233,15 @@ function App() {
     }
   }, [isInitialized, sessionId]);
 
-  // After sign-in, restore a board only if current user has access (owner or shared_with)
+  // After sign-in, restore a board only if current user has access; otherwise show dashboard
   useEffect(() => {
     if (!user || sessionId || joiningByToken) return;
     const stored = localStorage.getItem('current_session_id');
-    if (!stored) return;
+    if (!stored) {
+      setShowDashboard(true);
+      setShowRecoveryDialog(false);
+      return;
+    }
     checkSession({ params: { session_id: stored } })
       .then((result) => {
         if (result.has_session) {
@@ -251,11 +250,15 @@ function App() {
         } else {
           clearBoardToken(stored);
           clearCurrentSessionStorage();
+          setShowDashboard(true);
+          setShowRecoveryDialog(false);
         }
       })
       .catch(() => {
         clearBoardToken(stored);
         clearCurrentSessionStorage();
+        setShowDashboard(true);
+        setShowRecoveryDialog(false);
       });
   }, [user]);
 
@@ -381,28 +384,19 @@ function App() {
     setTimeout(() => setShareUrl(null), 3000);
   };
 
-  // Auth gate: show login until we know auth state; allow guest access when joined via token (sessionId set)
-  const hasTokenInUrl = typeof window !== 'undefined' && !!new URLSearchParams(window.location.search).get('token');
-  const stuckOnLoading = (authLoading || joiningByToken) && !skipLoading;
-  if (stuckOnLoading) {
-    return (
-      <div className="app-container app-loading">
-        <div className="container app-loading-card">
-          <p className="app-loading-text">
-            {hasTokenInUrl ? 'Loading shared board…' : 'Loading…'}
-          </p>
-          <p className="app-loading-hint">If this takes too long, refresh the page or check your connection.</p>
-          <button
-            type="button"
-            className="app-loading-skip"
-            onClick={() => setSkipLoading(true)}
-          >
-            Stuck? Click here to continue
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const handleStartBoard = () => {
+    setShowDashboard(false);
+    setShowRecoveryDialog(false);
+  };
+
+  const handleSelectSession = (sid) => {
+    setSessionId(sid);
+    localStorage.setItem('current_session_id', sid);
+    setIsInitialized(true);
+    setShowDashboard(false);
+    setShowRecoveryDialog(false);
+    loadCurrentState(sid);
+  };
 
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const hasShareToken = urlParams && urlParams.get('token');
@@ -411,6 +405,27 @@ function App() {
     return (
       <Login
         message={hasShareToken ? 'Sign in to open this shared board. Only people the owner shared with can access it.' : undefined}
+      />
+    );
+  }
+
+  if (joiningByToken) {
+    return (
+      <div className="app-container app-loading">
+        <div className="container app-loading-card">
+          <p className="app-loading-text">Loading shared board…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (showDashboard) {
+    return (
+      <Dashboard
+        user={user}
+        onStartBoard={handleStartBoard}
+        onSelectSession={handleSelectSession}
+        onLogout={handleLogout}
       />
     );
   }
