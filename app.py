@@ -583,6 +583,14 @@ def list_unfinished_sessions():
     return jsonify({"sessions": sessions})
 
 
+@app.route('/api/sessions/my-sessions', methods=['GET'])
+def list_my_sessions():
+    """List active (unfinished) sessions the current user can access (owner or shared_with)."""
+    all_sessions = session_manager.list_unfinished_sessions()
+    accessible = [s for s in all_sessions if can_access_board(s.get("session_id") or "")]
+    return jsonify({"sessions": accessible})
+
+
 @app.route('/api/sessions/<session_id>/load', methods=['GET'])
 def load_session(session_id: str):
     """Load an existing session (resume debugging). Requires owner or valid share token."""

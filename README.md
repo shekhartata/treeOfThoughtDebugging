@@ -521,7 +521,7 @@ treeOfThoughtProj/
 
 ## License
 
-This tool is designed for internal use by MongoDB Consulting Engineers.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
 
 ## Additional Documentation
 

@@ -4,7 +4,8 @@ const API_BASE = '/api';
 const AUTH_TOKEN_KEY = 'auth_token';
 const BOARD_TOKENS_KEY = 'board_tokens';
 
-const API_TIMEOUT_MS = 15000;
+// No timeout (0 = wait indefinitely) so long-running LLM calls (e.g. OpenAI) don't get cancelled
+const API_TIMEOUT_MS = 0;
 
 const api = axios.create({
   baseURL: API_BASE,
