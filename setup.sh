@@ -32,9 +32,21 @@ if [ ! -f .env ]; then
     if [ -f .env.sample ]; then
         cp .env.sample .env
     else
-        echo "OPENAI_API_KEY=sk-your-openai-api-key-here" > .env
+        cat > .env << 'EOF'
+# LLM Provider Configuration
+# Available providers: openai, groq
+LLM_PROVIDER=openai
+
+# OpenAI API Key (for GPT-5)
+OPENAI_API_KEY=sk-your-openai-api-key-here
+
+# Groq API Key (for DeepSeek-R1-Distill-Llama-70B - faster inference)
+# Get your key at: https://console.groq.com/keys
+GROQ_API_KEY=gsk-your-groq-api-key-here
+EOF
     fi
-    echo "   ⚠️  Please edit .env and add your OPENAI_API_KEY"
+    echo "   ⚠️  Please edit .env and add your API keys"
+    echo "   ⚠️  Set LLM_PROVIDER=groq for faster inference"
 else
     echo "5. .env file already exists"
 fi

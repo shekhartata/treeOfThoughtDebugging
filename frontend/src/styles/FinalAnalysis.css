@@ -1,0 +1,38 @@
+.final-analysis-section {
+    background: #e8f5e9;
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+
+.final-analysis-content {
+    margin-top: 15px;
+}
+
+.analysis-section {
+    background: white;
+    padding: 15px;
+    border-radius: 6px;
+    margin-top: 15px;
+}
+
+.analysis-section h4 {
+    color: #2e7d32;
+    margin-bottom: 10px;
+}
+
+.analysis-section p {
+    color: #666;
+    line-height: 1.6;
+}
+
+.analysis-section ul {
+    margin-top: 10px;
+    padding-left: 20px;
+}
+
+.analysis-section li {
+    margin: 8px 0;
+    color: #333;
+}
+

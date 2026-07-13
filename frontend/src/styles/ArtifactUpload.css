@@ -1,0 +1,36 @@
+.artifact-upload {
+    background: #fff3e0;
+    padding: 15px;
+    border-radius: 6px;
+    margin-top: 15px;
+}
+
+.focused-mode-indicator {
+    background: #fff3cd;
+    border: 2px solid #ffc107;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 15px;
+}
+
+.branch-checkboxes {
+    margin-top: 10px;
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    padding: 10px;
+    border-radius: 4px;
+    background: white;
+}
+
+.branch-checkboxes label {
+    display: block;
+    margin: 5px 0;
+    font-weight: normal;
+    cursor: pointer;
+}
+
+.branch-checkboxes input[type="checkbox"] {
+    margin-right: 8px;
+}
+

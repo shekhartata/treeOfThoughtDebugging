@@ -1,0 +1,17 @@
+.next-requests {
+    background: #e3f2fd;
+    padding: 15px;
+    border-radius: 6px;
+    margin-top: 15px;
+}
+
+.next-requests ul {
+    margin-top: 10px;
+    padding-left: 20px;
+}
+
+.next-requests li {
+    margin: 8px 0;
+    color: #1976d2;
+}
+

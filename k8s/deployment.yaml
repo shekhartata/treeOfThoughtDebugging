@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tot-debugging
+  namespace: tot-debugging
+  labels:
+    app: tot-debugging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tot-debugging
+  template:
+    metadata:
+      labels:
+        app: tot-debugging
+    spec:
+      containers:
+        - name: app
+          image: REGISTRY_IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: tot-debugging-config
+            - secretRef:
+                name: tot-debugging-secret
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+---
+# Optional: scale to more replicas and rely on Ingress session affinity
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: tot-debugging-hpa
+#   namespace: tot-debugging
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: tot-debugging
+#   minReplicas: 1
+#   maxReplicas: 4
+#   metrics:
+#     - type: Resource
+#       resource:
+#         name: cpu
+#         target:
+#           type: Utilization
+#           averageUtilization: 70

@@ -1,0 +1,15 @@
+.hypotheses-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.hypotheses-empty {
+    padding: 20px;
+    text-align: center;
+    color: #666;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+

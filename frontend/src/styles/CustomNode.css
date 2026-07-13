@@ -1,0 +1,122 @@
+.custom-node {
+    background: white;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 12px;
+    min-width: 200px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s;
+}
+
+.custom-node.active {
+    border-color: #4caf50;
+}
+
+.custom-node.pruned {
+    border-color: #f44336;
+    opacity: 0.6;
+}
+
+.custom-node.accepted {
+    border-color: #2196f3;
+}
+
+.custom-node.current {
+    border-color: #9c27b0;
+    border-width: 3px;
+    box-shadow: 0 4px 12px rgba(156, 39, 176, 0.3);
+}
+
+.node-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.node-title {
+    font-weight: 600;
+    color: #333;
+    font-size: 13px;
+    flex: 1;
+}
+
+.current-badge {
+    background: #9c27b0;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-left: 8px;
+}
+
+.node-badges {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.confidence-badge {
+    display: inline-block;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: white;
+}
+
+.artifact-badge {
+    display: inline-block;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: #e0e0e0;
+    color: #666;
+}
+
+.node-actions {
+    display: flex;
+    gap: 5px;
+    margin-top: 8px;
+}
+
+.node-button {
+    flex: 1;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.backtrack-button {
+    background: #2196f3;
+    color: white;
+}
+
+.backtrack-button:hover {
+    background: #1976d2;
+}
+
+.expand-button {
+    background: #4caf50;
+    color: white;
+}
+
+.expand-button:hover {
+    background: #45a049;
+}
+
+.details-button {
+    background: #667eea;
+    color: white;
+}
+
+.details-button:hover {
+    background: #5568d3;
+}
+

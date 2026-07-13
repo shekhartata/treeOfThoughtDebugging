@@ -1,0 +1,62 @@
+# HTTPS at the edge; traffic to Service is HTTP.
+# Session affinity: same X-Session-ID goes to same backend (when multiple replicas).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tot-debugging-ingress
+  namespace: tot-debugging
+  labels:
+    app: tot-debugging
+  annotations:
+    # GKE: use Google-managed cert (replace with your domain)
+    # networking.gke.io/managed-certificates: "tot-debugging-cert"
+    # Or use a static IP and attach to this Ingress
+    # kubernetes.io/ingress.global-static-ip-name: "tot-debugging-ip"
+    # Session affinity by header (NGINX Ingress); routes same session to same pod
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$http_x_session_id"
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "TOT_SESSION"
+    nginx.ingress.kubernetes.io/session-cookie-expires: "172800"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: tot-debugging.example.com   # Replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tot-debugging
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - tot-debugging.example.com     # Replace with your domain
+      secretName: tot-debugging-tls     # Create this Secret with your cert, or use managed cert
+---
+# Alternative: GKE Ingress (no NGINX annotations); use this if you use GKE's built-in Ingress
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: tot-debugging-ingress
+#   namespace: tot-debugging
+#   annotations:
+#     kubernetes.io/ingress.class: "gce"
+#     networking.gke.io/managed-certificates: "tot-debugging-cert"
+# spec:
+#   rules:
+#     - host: tot-debugging.example.com
+#       http:
+#         paths:
+#           - path: /*
+#             pathType: ImplementationSpecific
+#             backend:
+#               service:
+#                 name: tot-debugging
+#                 port:
+#                   number: 80
+#   tls:
+#     - hosts:
+#         - tot-debugging.example.com
